@@ -15,9 +15,9 @@ public class ClientHandler
     public GameRoom CurrentRoom { get; set; }
     public string PlayerSymbol { get; set; }
     public bool IsConnected { get; set; } = true;
-    private readonly TicTacToeServer server;
+    private readonly IGameServer server;
 
-    public ClientHandler(TcpClient tcpClient, TicTacToeServer server)
+    public ClientHandler(TcpClient tcpClient, IGameServer server)
     {
         TcpClient = tcpClient;
         Stream = tcpClient.GetStream();

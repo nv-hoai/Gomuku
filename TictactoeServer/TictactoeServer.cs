@@ -3,7 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 
 namespace TicTacToeServer;
-public class TicTacToeServer
+public class TicTacToeServer : IGameServer
 {
     private TcpListener tcpListener;
     private readonly int port;
