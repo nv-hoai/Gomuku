@@ -117,10 +117,6 @@ public class ClientHandler
             {
                 await HandleFindMatch();
             }
-            else if (message == "PLAY_VS_AI")
-            {
-                await HandlePlayVsAI();
-            }
             else if (message == "START_GAME")
             {
                 await HandleStartGame();
@@ -179,15 +175,6 @@ public class ClientHandler
                     await SendMessage($"GAME_MOVE:{json}");
                     await opponent.SendMessage($"GAME_MOVE:{json}");
                 }
-
-                // If PvE and now it's AI's turn, trigger AI
-                if (CurrentRoom.IsVsAI && CurrentRoom.CurrentPlayer == "O")
-                {
-                    _ = Task.Run(async () =>
-                    {
-                        await server.ProcessGameMove(CurrentRoom, null!, default!);
-                    });
-                }
             }
         }
         catch (Exception ex)
@@ -243,32 +230,6 @@ public class ClientHandler
         {
             await SendMessage("ERROR:Failed to find or create match");
         }
-    }
-
-    private async Task HandlePlayVsAI()
-    {
-        if (PlayerInfo == null)
-        {
-            await SendMessage("ERROR:Send player info first");
-            return;
-        }
-
-        // Create a new room dedicated to PvE
-        var roomId = Guid.NewGuid().ToString();
-        var room = new GameRoom(roomId);
-        room.SetupVsAI();
-        room.AddPlayer(this); // You are X
-        CurrentRoom = room;
-
-        await SendMessage($"JOIN_ROOM:{room.RoomId}");
-        await SendMessage("MATCH_FOUND:Match found vs AI, ready to start");
-        await SendMessage("PLAYER_SYMBOL:X");
-
-        // Mark player ready and start immediately (AI is auto-ready)
-        room.Player1Ready = true;
-        await server.StartGame(room);
-
-        // If AI starts (if you decide AI can be X), trigger it here; default: player X starts
     }
 
     private async Task HandleStartGame()
