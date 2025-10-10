@@ -14,6 +14,9 @@ public class GameRoom
     public bool IsGameActive { get; set; } = false;
     public DateTime LastActivity { get; set; } = DateTime.Now;
 
+    // PvE flag: Player2 is AI if true
+    public bool IsVsAI { get; set; } = false;
+
     public GameRoom(string roomId)
     {
         RoomId = roomId;
@@ -31,12 +34,17 @@ public class GameRoom
         }
     }
 
-    public bool IsFull => Player1 != null && Player2 != null;
-    public bool IsEmpty => Player1 == null && Player2 == null;
-    public bool BothPlayersReady => Player1Ready && Player2Ready && IsFull;
+    public bool IsFull => IsVsAI ? Player1 != null : Player1 != null && Player2 != null;
+    public bool IsEmpty => Player1 == null && (!IsVsAI ? Player2 == null : true);
+    public bool BothPlayersReady => IsVsAI ? Player1Ready : Player1Ready && Player2Ready && IsFull;
 
     public ClientHandler GetOpponent(ClientHandler player)
     {
+        if (IsVsAI)
+        {
+            // No actual opponent client when playing vs AI
+            return null;
+        }
         return player == Player1 ? Player2 : Player1;
     }
 
@@ -48,7 +56,7 @@ public class GameRoom
             client.PlayerSymbol = "X";
             return true;
         }
-        else if (Player2 == null)
+        else if (!IsVsAI && Player2 == null)
         {
             Player2 = client;
             client.PlayerSymbol = "O";
@@ -57,11 +65,18 @@ public class GameRoom
         return false;
     }
 
+    public void SetupVsAI()
+    {
+        IsVsAI = true;
+        Player2 = null;      // AI placeholder
+        Player2Ready = true; // AI is always ready
+    }
+
     public void RemovePlayer(ClientHandler client)
     {
         if (Player1 == client)
             Player1 = null;
-        else if (Player2 == client)
+        else if (!IsVsAI && Player2 == client)
             Player2 = null;
 
         IsGameActive = false;
