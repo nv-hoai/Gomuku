@@ -333,63 +333,55 @@ public class TicTacToeServer
 
     public async Task<WorkerResponse?> AskWorkerAsync(WorkerRequest request, string workerIp, int workerPort)
     {
+        var workerId = $"{workerIp}:{workerPort}";
         try
         {
             using var client = new TcpClient();
-            await client.ConnectAsync(workerIp, workerPort);
+            var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await client.ConnectAsync(workerIp, workerPort, connectCts.Token);
+
+            client.SendTimeout = 5000;
+            client.ReceiveTimeout = 10000;
 
             using var stream = client.GetStream();
 
-            // Send request
+            // Send request (newline framed)
             string requestJson = JsonSerializer.Serialize(request);
             byte[] requestData = Encoding.UTF8.GetBytes(requestJson + "\n");
             await stream.WriteAsync(requestData);
             await stream.FlushAsync();
 
-            // Read response
+            // Read one line (ending with '\n')
             var responseBuilder = new StringBuilder();
             var buffer = new byte[4096];
-            int bytesRead;
-
-            while ((bytesRead = await stream.ReadAsync(buffer)) > 0)
+            var readCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (true)
             {
-                var data = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                responseBuilder.Append(data);
-
-                // Check if we have a complete message
-                if (data.Contains('\n'))
-                    break;
-            }
-
-            string responseJson = responseBuilder.ToString().Trim();
-            var response = JsonSerializer.Deserialize<WorkerResponse>(responseJson);
-            
-            // Update worker load
-            await workerLock.WaitAsync();
-            try
-            {
-                var workerId = $"{workerIp}:{workerPort}";
-                if (workers.TryGetValue(workerId, out var worker))
+                int bytesRead = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), readCts.Token);
+                if (bytesRead <= 0) break;
+                var chunk = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                responseBuilder.Append(chunk);
+                var full = responseBuilder.ToString();
+                var newlineIdx = full.IndexOf('\n');
+                if (newlineIdx >= 0)
                 {
-                    worker.CurrentLoad = Math.Max(0, worker.CurrentLoad - 1); // Decrement load
+                    var line = full.Substring(0, newlineIdx).Trim();
+                    var response = JsonSerializer.Deserialize<WorkerResponse>(line);
+                    return response;
                 }
             }
-            finally
-            {
-                workerLock.Release();
-            }
 
-            return response;
+            Console.WriteLine($"Worker {workerId} closed connection without newline-terminated response");
+            return null;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error communicating with worker {workerIp}:{workerPort}: {ex.Message}");
+            Console.WriteLine($"Error communicating with worker {workerId}: {ex.Message}");
             
             // Remove worker if it's not responding
             await workerLock.WaitAsync();
             try
             {
-                var workerId = $"{workerIp}:{workerPort}";
                 workers.TryRemove(workerId, out _);
                 Console.WriteLine($"Removed unresponsive worker {workerId}");
             }
@@ -399,6 +391,22 @@ public class TicTacToeServer
             }
             
             return null;
+        }
+        finally
+        {
+            // Update worker load decremented if worker is still registered
+            await workerLock.WaitAsync();
+            try
+            {
+                if (workers.TryGetValue(workerId, out var worker))
+                {
+                    worker.CurrentLoad = Math.Max(0, worker.CurrentLoad - 1);
+                }
+            }
+            finally
+            {
+                workerLock.Release();
+            }
         }
     }
 
