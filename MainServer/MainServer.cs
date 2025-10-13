@@ -2,8 +2,8 @@
 using System.Net;
 using System.Net.Sockets;
 
-namespace TicTacToeServer;
-public class TicTacToeServer
+namespace MainServer;
+public class MainServer
 {
     private TcpListener tcpListener;
     private readonly int port;
@@ -11,7 +11,7 @@ public class TicTacToeServer
     private readonly ConcurrentDictionary<string, ClientHandler> clients = new();
     private readonly MatchmakingService matchmakingService = new();
 
-    public TicTacToeServer(int port = 5000)
+    public MainServer(int port = 5000)
     {
         this.port = port;
     }

@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace TicTacToeServer;
+namespace MainServer;
 
 public class ClientHandler
 {
@@ -15,9 +15,9 @@ public class ClientHandler
     public GameRoom CurrentRoom { get; set; }
     public string PlayerSymbol { get; set; }
     public bool IsConnected { get; set; } = true;
-    private readonly TicTacToeServer server;
+    private readonly MainServer server;
 
-    public ClientHandler(TcpClient tcpClient, TicTacToeServer server)
+    public ClientHandler(TcpClient tcpClient, MainServer server)
     {
         TcpClient = tcpClient;
         Stream = tcpClient.GetStream();

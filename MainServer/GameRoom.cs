@@ -1,6 +1,6 @@
 using System;
 
-namespace TicTacToeServer;
+namespace MainServer;
 
 public class GameRoom
 {
