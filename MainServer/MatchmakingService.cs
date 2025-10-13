@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using SharedLib.Models;
 
 namespace MainServer;
 
@@ -14,8 +15,8 @@ public class MatchmakingService
 
     public async Task<GameRoom> FindOrCreateRoom(ClientHandler client)
     {
-        GameRoom room = null;
-        ClientHandler waitingPlayer = null;
+        GameRoom? room = null;
+        ClientHandler? waitingPlayer = null;
 
         // Do the synchronous work inside the lock
         lock (waitingLock)
@@ -50,8 +51,26 @@ public class MatchmakingService
         return room;
     }
 
+    public async Task<GameRoom> CreateAIRoom(ClientHandler client)
+    {
+        var roomId = Guid.NewGuid().ToString();
+        var room = new GameRoom(roomId)
+        {
+            IsAIGame = true,
+            AISymbol = "O"
+        };
 
-    public void LeaveRoom(ClientHandler client, GameRoom room)
+        if (room.AddPlayer(client))
+        {
+            gameRooms[roomId] = room;
+            await client.SendMessage($"PLAYER_SYMBOL:{client.PlayerSymbol}");
+            return room;
+        }
+
+        throw new InvalidOperationException("Failed to add player to AI room");
+    }
+
+    public void LeaveRoom(IGamePlayer client, GameRoom room)
     {
         room.RemovePlayer(client);
 
