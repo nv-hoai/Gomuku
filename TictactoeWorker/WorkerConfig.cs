@@ -1,7 +1,7 @@
 using System;
 using System.Net;
 using System.Threading.Tasks;
-
+using System.Linq;
 namespace TictactoeWorker;
 
 /// <summary>
@@ -79,6 +79,7 @@ public class WorkerConfig
                 var hostName = Dns.GetHostName();
                 var addresses = await Dns.GetHostAddressesAsync(hostName);
                 var ipv4 = addresses.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+
                 if (ipv4 != null)
                 {
                     LocalIp = ipv4.ToString();

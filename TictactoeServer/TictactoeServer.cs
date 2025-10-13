@@ -18,11 +18,31 @@ public class TicTacToeServer
     private readonly ConcurrentDictionary<string, WorkerInfo> workers = new();
     private readonly SemaphoreSlim workerLock = new(1, 1);
     private readonly int maxConcurrentRequests = 5; // Consider server overloaded if more than 5 concurrent requests
+    private readonly int maxClients = 3; // Phân tán khi có nhiều hơn 3 clients
     private int currentConcurrentRequests = 0;
 
     public TicTacToeServer(int port = 5000)
     {
         this.port = port;
+    }
+
+    // 🔥 THÊM: Helper methods để convert arrays
+    private static string[][] ConvertToJaggedArray(string[,] multiArray)
+    {
+        int rows = multiArray.GetLength(0);
+        int cols = multiArray.GetLength(1);
+        
+        string[][] jaggedArray = new string[rows][];
+        for (int r = 0; r < rows; r++)
+        {
+            jaggedArray[r] = new string[cols];
+            for (int c = 0; c < cols; c++)
+            {
+                jaggedArray[r][c] = multiArray[r, c] ?? string.Empty;
+            }
+        }
+        
+        return jaggedArray;
     }
 
     public async Task StartAsync()
@@ -32,10 +52,15 @@ public class TicTacToeServer
         isRunning = true;
 
         Console.WriteLine($"Tic-Tac-Toe Server started on port {port}");
-        Console.WriteLine($"Server will distribute workload when handling more than {maxConcurrentRequests} concurrent requests");
+      
+        Console.WriteLine($"Server will distribute workload when having more than {maxClients} connected clients");
 
         // Start cleanup tasks
         _ = Task.Run(CleanupRoomsAsync);
+        
+        // Start worker status reporting
+        // Start worker status reporting - GIÁ TRƯỚC MỖI 30s
+        _ = Task.Run(ReportWorkerStatusAsync);
 
         while (isRunning)
         {
@@ -46,6 +71,7 @@ public class TicTacToeServer
                 clients[clientHandler.ClientId] = clientHandler;
 
                 Console.WriteLine($"New client connected: {clientHandler.ClientId}");
+                Console.WriteLine($"📊 Total connected clients: {clients.Count}");
 
                 // Handle client in background
                 _ = Task.Run(() => clientHandler.HandleClientAsync());
@@ -60,11 +86,62 @@ public class TicTacToeServer
         }
     }
 
+    // Thêm method để report worker status
+    // Thêm method để report worker status - GIẢM XUỐC 30s
+    private async Task ReportWorkerStatusAsync()
+    {
+        while (isRunning)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30)); // Giảm từ 2 phút xuống 30s
+            
+            await workerLock.WaitAsync();
+            try
+            {
+                Console.WriteLine("===== SERVER STATUS =====");
+                Console.WriteLine($"Total registered workers: {workers.Count}");
+                
+                if (workers.Count == 0)
+                {
+                    Console.WriteLine("⚠️ NO WORKERS REGISTERED! Workers need to auto-register first.");
+                }
+                else
+                {
+                    foreach (var kvp in workers)
+                    {
+                        var worker = kvp.Value;
+                        Console.WriteLine($"Worker {kvp.Key}: Role={worker.Role}, Load={worker.CurrentLoad}");
+                    }
+                }
+                
+                Console.WriteLine($"Current connected clients: {clients.Count}");
+                Console.WriteLine($"Current concurrent requests: {currentConcurrentRequests}");
+                
+                // THÊM: Kiểm tra logic phân tán
+                bool shouldDistribute = clients.Count > maxClients && workers.Values.Any(w => w.Role == "Logic");
+                Console.WriteLine($"Should distribute work: {shouldDistribute} (clients: {clients.Count} > {maxClients} && has Logic worker: {workers.Values.Any(w => w.Role == "Logic")})");
+                
+                Console.WriteLine("========================");
+            }
+            finally
+            {
+                workerLock.Release();
+            }
+        }
+    }
+
     public void RegisterWorker(string ip, int port, string role)
     {
         var workerId = $"{ip}:{port}";
         workers[workerId] = new WorkerInfo { Ip = ip, Port = port, Role = role, CurrentLoad = 0 };
-        Console.WriteLine($"Registered worker {workerId} with role {role}");
+        Console.WriteLine($"✅ Registered worker {workerId} with role {role}");
+        Console.WriteLine($"Total workers: {workers.Count}");
+        
+        // THÊM: Logging để confirm registration
+        Console.WriteLine($"🔍 Current worker list:");
+        foreach (var kvp in workers)
+        {
+            Console.WriteLine($"   - {kvp.Key}: {kvp.Value.Role}");
+        }
     }
 
     public Task<GameRoom> FindOrCreateRoom(ClientHandler client)
@@ -88,7 +165,7 @@ public class TicTacToeServer
         if (room.Player2 != null)
             await room.Player2.SendMessage(startMessage);
 
-        Console.WriteLine($"Game started in room {room.RoomId}");
+        Console.WriteLine($"🎮 Game started in room {room.RoomId}");
     }
 
     public async Task<bool> ProcessGameMove(GameRoom room, ClientHandler player, MoveData move)
@@ -96,6 +173,10 @@ public class TicTacToeServer
         Interlocked.Increment(ref currentConcurrentRequests);
         try
         {
+            int connectedClients = clients.Count;
+            Console.WriteLine($"🎯 Processing move - Connected clients: {connectedClients}/{maxClients}, Current requests: {currentConcurrentRequests}");
+            Console.WriteLine($"🔍 Available workers: {workers.Count}, Logic workers: {workers.Values.Count(w => w.Role == "Logic")}");
+            
             // Check if this is an AI move or if server is overloaded
             if (player == null) // AI move
             {
@@ -138,16 +219,21 @@ public class TicTacToeServer
                 return false;
             }
 
-            // Check if we're overloaded and should delegate this to a worker
-            bool useWorker = currentConcurrentRequests > maxConcurrentRequests;
+            // 🔥 SỬA: Phân tán dựa trên số clients thay vì requests
+            bool useWorker = connectedClients > maxClients && workers.Values.Any(w => w.Role == "Logic");
             
+            Console.WriteLine($"🤔 Distribution decision: useWorker={useWorker} (clients {connectedClients} > {maxClients}: {connectedClients > maxClients}, has Logic worker: {workers.Values.Any(w => w.Role == "Logic")})");
+
             if (useWorker)
             {
                 // Try to find a Logic worker
                 var worker = await GetAvailableWorkerAsync("Logic");
                 if (worker != null)
                 {
-                    Console.WriteLine($"[Client] -> [Main Server] -> [Worker {worker.Ip}:{worker.Port}] (Server is overloaded, delegating move validation)");
+                    Console.WriteLine($"🔄 [Client] -> [Main Server] -> [Worker {worker.Ip}:{worker.Port}] (Too many clients: {connectedClients}, delegating to worker)");
+                    
+                    // 🔥 SỬA: Convert board to jagged array trước khi gửi
+                    var jaggedBoard = ConvertToJaggedArray(room.Board);
                     
                     // Send request to worker
                     var response = await AskWorkerAsync(new WorkerRequest
@@ -156,13 +242,13 @@ public class TicTacToeServer
                         RequestId = Guid.NewGuid().ToString(),
                         GameId = room.RoomId,
                         PlayerSymbol = player.PlayerSymbol,
-                        Board = room.Board,
+                        Board = jaggedBoard, // 🔥 Sử dụng jagged array
                         LastMove = move
                     }, worker.Ip, worker.Port);
 
                     if (response != null && response.IsSuccess)
                     {
-                        Console.WriteLine($"[Worker {worker.Ip}:{worker.Port}] -> [Main Server] -> [Client] (Move validated by worker)");
+                        Console.WriteLine($"✅ [Worker {worker.Ip}:{worker.Port}] -> [Main Server] -> [Client] (Move validated by worker)");
                         
                         // Apply move from worker response
                         room.Board[move.row, move.col] = player.PlayerSymbol;
@@ -189,7 +275,7 @@ public class TicTacToeServer
                             await room.Player1.SendMessage(turnMessage);
                         if (room.Player2 != null)
                             await room.Player2.SendMessage(turnMessage);
-                            
+							
                         return true;
                     }
                     else
@@ -207,7 +293,11 @@ public class TicTacToeServer
                     }
                 }
                 // If no worker available, process locally
-                Console.WriteLine("No worker available, processing move locally");
+                Console.WriteLine("⚠️ No Logic worker available, processing move locally");
+            }
+            else
+            {
+                Console.WriteLine($"💻 Processing locally (clients: {connectedClients} <= {maxClients} threshold or no Logic worker available)");
             }
 
             // Process locally
@@ -265,25 +355,28 @@ public class TicTacToeServer
         var worker = await GetAvailableWorkerAsync("AI");
         if (worker != null)
         {
-            Console.WriteLine($"[Client] -> [Main Server] -> [AI Worker {worker.Ip}:{worker.Port}] (Requesting AI move)");
+            Console.WriteLine($"🤖 [Client] -> [Main Server] -> [AI Worker {worker.Ip}:{worker.Port}] (Requesting AI move)");
+            
+            // 🔥 SỬA: Convert board to jagged array trước khi gửi
+            var jaggedBoard = ConvertToJaggedArray(room.Board);
             
             var response = await AskWorkerAsync(new WorkerRequest
             {
                 RequestType = "AI_MOVE",
                 RequestId = Guid.NewGuid().ToString(),
                 GameId = room.RoomId,
-                Board = room.Board
+                Board = jaggedBoard // 🔥 Sử dụng jagged array
             }, worker.Ip, worker.Port);
 
             if (response != null && response.IsSuccess)
             {
-                Console.WriteLine($"[AI Worker {worker.Ip}:{worker.Port}] -> [Main Server] -> [Client] (AI move received)");
+                Console.WriteLine($"✅ [AI Worker {worker.Ip}:{worker.Port}] -> [Main Server] -> [Client] (AI move received)");
                 return response;
             }
         }
 
         // If no AI worker or worker failed, use fallback logic (random move)
-        Console.WriteLine("No AI worker available, generating random move");
+        Console.WriteLine("⚠️ No AI worker available, generating random move locally");
         return new WorkerResponse
         {
             RequestId = Guid.NewGuid().ToString(),
@@ -318,11 +411,14 @@ public class TicTacToeServer
                 .OrderBy(w => w.CurrentLoad)
                 .ToList();
 
+            Console.WriteLine($"🔍 Looking for {role} workers: Found {availableWorkers.Count}");
+
             if (availableWorkers.Count == 0)
                 return null;
 
             var worker = availableWorkers.First();
             worker.CurrentLoad++; // Increment load
+            Console.WriteLine($"📋 Selected worker {worker.Ip}:{worker.Port} (load: {worker.CurrentLoad})");
             return worker;
         }
         finally
@@ -336,6 +432,8 @@ public class TicTacToeServer
         var workerId = $"{workerIp}:{workerPort}";
         try
         {
+            Console.WriteLine($"📡 Sending request to worker {workerId}: {request.RequestType}");
+            
             using var client = new TcpClient();
             var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await client.ConnectAsync(workerIp, workerPort, connectCts.Token);
@@ -367,6 +465,7 @@ public class TicTacToeServer
                 {
                     var line = full.Substring(0, newlineIdx).Trim();
                     var response = JsonSerializer.Deserialize<WorkerResponse>(line);
+                    Console.WriteLine($"📨 Received response from worker {workerId}: Success={response?.IsSuccess}");
                     return response;
                 }
             }
@@ -376,14 +475,14 @@ public class TicTacToeServer
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error communicating with worker {workerId}: {ex.Message}");
+            Console.WriteLine($"❌ Error communicating with worker {workerId}: {ex.Message}");
             
             // Remove worker if it's not responding
             await workerLock.WaitAsync();
             try
             {
                 workers.TryRemove(workerId, out _);
-                Console.WriteLine($"Removed unresponsive worker {workerId}");
+                Console.WriteLine($"🗑️ Removed unresponsive worker {workerId}");
             }
             finally
             {
@@ -438,6 +537,7 @@ public class TicTacToeServer
     public void RemoveClient(ClientHandler client)
     {
         clients.TryRemove(client.ClientId, out _);
+        Console.WriteLine($"📉 Client disconnected: {client.ClientId}. Remaining clients: {clients.Count}");
     }
 
     private async Task CleanupRoomsAsync()

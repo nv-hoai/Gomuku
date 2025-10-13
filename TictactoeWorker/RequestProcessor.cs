@@ -121,18 +121,18 @@ public class RequestProcessor
             Console.WriteLine($"Warning: Non-AI worker ({_role}) processing AI_MOVE request");
         }
 
+        // Convert jagged array to multidimensional for processing
+        var board = GameUtils.ConvertToMultiArray(request.Board);
+
         // Simulate AI processing time based on board complexity
         int filledCells = 0;
-        if (request.Board != null)
+        for (int i = 0; i < 15; i++)
         {
-            for (int i = 0; i < 15; i++)
+            for (int j = 0; j < 15; j++)
             {
-                for (int j = 0; j < 15; j++)
+                if (!string.IsNullOrEmpty(board[i, j]))
                 {
-                    if (!string.IsNullOrEmpty(request.Board[i, j]))
-                    {
-                        filledCells++;
-                    }
+                    filledCells++;
                 }
             }
         }
@@ -146,7 +146,7 @@ public class RequestProcessor
 
         // In a real implementation, we would call the AI logic here
         // For now, just generate a random valid move
-        var move = GameUtils.GenerateRandomMove(request.Board ?? new string[15, 15]);
+        var move = GameUtils.GenerateRandomMove(board);
 
         return JsonSerializer.Serialize(new WorkerResponse
         {
@@ -191,6 +191,7 @@ public class RequestProcessor
             });
         }
 
+        // Convert to jagged array for validation
         bool isValid = GameLogic.IsValidMove(request.Board, request.LastMove.row, request.LastMove.col);
         
         if (!isValid)
@@ -204,9 +205,23 @@ public class RequestProcessor
             });
         }
 
-        // Apply the move to check for win condition
-        var boardCopy = (string[,])request.Board.Clone();
-        boardCopy[request.LastMove.row, request.LastMove.col] = request.PlayerSymbol ?? "X";
+        // Apply the move to check for win condition (make a copy)
+        var boardCopy = new string[request.Board.Length][];
+        for (int i = 0; i < request.Board.Length; i++)
+        {
+            boardCopy[i] = new string[request.Board[i]?.Length ?? 0];
+            for (int j = 0; j < (request.Board[i]?.Length ?? 0); j++)
+            {
+                boardCopy[i][j] = request.Board[i][j] ?? string.Empty;
+            }
+        }
+        
+        // Apply move
+        if (request.LastMove.row < boardCopy.Length && 
+            request.LastMove.col < (boardCopy[request.LastMove.row]?.Length ?? 0))
+        {
+            boardCopy[request.LastMove.row][request.LastMove.col] = request.PlayerSymbol ?? "X";
+        }
 
         bool isWinningMove = GameLogic.CheckWin(boardCopy, request.LastMove.row, request.LastMove.col, request.PlayerSymbol ?? "X");
 

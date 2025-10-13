@@ -14,7 +14,10 @@ public class WorkerRequest
     public string RequestId { get; set; } = string.Empty;
     public string GameId { get; set; } = string.Empty;
     public string PlayerSymbol { get; set; } = string.Empty;
-    public string[,] Board { get; set; } = new string[15, 15];
+    
+    // 🔥 SỬA: Đổi từ string[,] sang string[][] (jagged array)
+    public string[][]? Board { get; set; } = null;
+    
     public MoveData LastMove { get; set; } = new MoveData();
     public WorkerInfo WorkerInfo { get; set; } = new WorkerInfo();
 }
