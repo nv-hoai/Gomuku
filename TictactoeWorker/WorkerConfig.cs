@@ -4,9 +4,6 @@ using System.Threading.Tasks;
 using System.Linq;
 namespace TictactoeWorker;
 
-/// <summary>
-/// Configuration settings for the worker
-/// </summary>
 public class WorkerConfig
 {
     // Default values
@@ -21,9 +18,6 @@ public class WorkerConfig
     public int MainServerPort { get; set; } = DEFAULT_SERVER_PORT;
     public bool AutoRegister { get; set; } = false;
 
-    /// <summary>
-    /// Parse command line arguments to set configuration
-    /// </summary>
     /// <param name="args">Command line arguments</param>
     /// <returns>Populated WorkerConfig instance</returns>
     public static WorkerConfig ParseCommandLineArgs(string[] args)
@@ -66,10 +60,6 @@ public class WorkerConfig
 
         return config;
     }
-
-    /// <summary>
-    /// Try to detect the local IP address
-    /// </summary>
     public async Task DetectLocalIpAsync()
     {
         if (LocalIp == "localhost")

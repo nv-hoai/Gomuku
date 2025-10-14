@@ -5,14 +5,13 @@ echo Starting Distributed Tic-Tac-Toe System...
 if not exist "logs" mkdir logs
 
 :: Start the main server
-start "Tic-Tac-Toe Main Server" cmd /k "dotnet run --project TictactoeServer\TictactoeServer.csproj > logs\server.log"
+start "Tic-Tac-Toe Main Server" cmd /k "dotnet run --project TictactoeServer\TictactoeServer.csproj"
 
 :: Wait for the server to initialize
 timeout /t 5
 
 :: Start two worker servers with different roles and ports
-start "Tic-Tac-Toe Worker (Logic)" cmd /k "dotnet run --project TictactoeWorker\TictactoeWorker.csproj -- --role Logic --port 6000 --autoregister --server localhost --serverport 5000 > logs\worker_logic.log"
-start "Tic-Tac-Toe Worker (AI)" cmd /k "dotnet run --project TictactoeWorker\TictactoeWorker.csproj -- --role AI --port 6001 --autoregister --server localhost --serverport 5000 > logs\worker_ai.log"
+start "Tic-Tac-Toe Worker (Logic)" cmd /k "dotnet run --project TictactoeWorker\TictactoeWorker.csproj --role Logic --port 6000 --autoregister --server localhost"
 
 :: Inform the user
 echo.

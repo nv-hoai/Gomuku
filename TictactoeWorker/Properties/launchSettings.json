@@ -7,13 +7,7 @@
         "DOTNET_ENVIRONMENT": "Development"
       }
     },
-    "WSL": {
-      "commandName": "WSL2",
-      "environmentVariables": {
-        "DOTNET_ENVIRONMENT": "Development"
-      },
-      "distributionName": ""
-    },
+
     "AIWorker": {
       "commandName": "Project",
       "commandLineArgs": "--role AI --port 6001 --autoregister --server localhost",

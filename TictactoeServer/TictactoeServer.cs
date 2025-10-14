@@ -52,14 +52,12 @@ public class TicTacToeServer
         isRunning = true;
 
         Console.WriteLine($"Tic-Tac-Toe Server started on port {port}");
-      
         Console.WriteLine($"Server will distribute workload when having more than {maxClients} connected clients");
 
         // Start cleanup tasks
         _ = Task.Run(CleanupRoomsAsync);
         
         // Start worker status reporting
-        // Start worker status reporting - GIÁ TRƯỚC MỖI 30s
         _ = Task.Run(ReportWorkerStatusAsync);
 
         while (isRunning)
@@ -70,7 +68,7 @@ public class TicTacToeServer
                 var clientHandler = new ClientHandler(tcpClient, this);
                 clients[clientHandler.ClientId] = clientHandler;
 
-                Console.WriteLine($"New client connected: {clientHandler.ClientId}");
+                Console.WriteLine($"New connection: {clientHandler.ClientId}");
                 Console.WriteLine($"📊 Total connected clients: {clients.Count}");
 
                 // Handle client in background
@@ -87,7 +85,6 @@ public class TicTacToeServer
     }
 
     // Thêm method để report worker status
-    // Thêm method để report worker status - GIẢM XUỐC 30s
     private async Task ReportWorkerStatusAsync()
     {
         while (isRunning)
@@ -537,7 +534,7 @@ public class TicTacToeServer
     public void RemoveClient(ClientHandler client)
     {
         clients.TryRemove(client.ClientId, out _);
-        Console.WriteLine($"📉 Client disconnected: {client.ClientId}. Remaining clients: {clients.Count}");
+        // Logging moved to ClientHandler.Disconnect()
     }
 
     private async Task CleanupRoomsAsync()

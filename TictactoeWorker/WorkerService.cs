@@ -5,9 +5,6 @@ using System.Threading.Tasks;
 
 namespace TictactoeWorker;
 
-/// <summary>
-/// Main worker service that manages the TCP server
-/// </summary>
 public class WorkerService
 {
     private readonly WorkerConfig _config;
@@ -25,17 +22,12 @@ public class WorkerService
         _registrationService = new ServerRegistrationService(config, _statisticsService);
     }
 
-    /// <summary>
-    /// Start the worker service
-    /// </summary>
     public async Task StartAsync()
     {
         Console.WriteLine($"Starting Tic-tac-toe Worker Server with role: {_config.Role} on port: {_config.Port}, IP: {_config.LocalIp}");
 
-        // Auto-register with main server if enabled
         _registrationService.StartRegistrationProcess();
 
-        // Start periodic statistics reporting
         _ = Task.Run(ReportStatisticsPeriodicallyAsync);
 
         // Start TCP listener
@@ -61,9 +53,6 @@ public class WorkerService
         }
     }
 
-    /// <summary>
-    /// Periodically report worker statistics
-    /// </summary>
     private async Task ReportStatisticsPeriodicallyAsync()
     {
         while (true)
