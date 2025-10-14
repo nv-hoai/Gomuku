@@ -196,11 +196,9 @@ public class ClientHandler : IGamePlayer
                         string playerJson = JsonSerializer.Serialize(PlayerInfo);
                         await opponent.SendMessage($"OPPONENT_INFO:{playerJson}");
                     }
-
                     await SendMessage("MATCH_FOUND:Match found, ready to start");
                     await opponent.SendMessage("MATCH_FOUND:Match found, ready to start");
                 }
-
             }
             else
             {

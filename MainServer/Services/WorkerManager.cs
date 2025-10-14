@@ -70,7 +70,7 @@ public class WorkerManager
         }
     }
 
-    public async Task<WorkerResponse?> SendAIRequestAsync(AIRequest aiRequest, int timeoutMs = 10000)
+    public async Task<WorkerResponse?> SendAIRequestAsync(AIRequest aiRequest, int timeoutMs = 7000)
     {
         var worker = GetAvailableWorker();
         if (worker == null)

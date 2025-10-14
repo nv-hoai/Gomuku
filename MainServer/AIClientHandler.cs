@@ -24,14 +24,12 @@ public class AIClientHandler : IGamePlayer
 
     public async Task SendMessage(string message)
     {
-        // AI doesn't need to receive messages, just log them
         Console.WriteLine($"AI would receive: {message}");
         await Task.CompletedTask;
     }
 
     public async Task Disconnect()
     {
-        // AI doesn't need cleanup
         await Task.CompletedTask;
     }
 }

@@ -41,6 +41,7 @@ public class MainServer
 
         // Primary worker
         await workerManager.AddWorkerAsync("localhost", 6000);
+        // await workerManager.AddWorkerAsync("192.168.236.57", 6000);
 
         // Optional additional workers (uncomment to use)
         /*
@@ -122,7 +123,7 @@ public class MainServer
     public async Task<bool> ProcessGameMove(GameRoom room, IGamePlayer player, MoveData move)
     {
         // Check if we should use worker for move validation
-        var shouldUseWorker = loadBalancer.ShouldUseWorker(OperationType.MoveValidation);
+        var shouldUseWorker = true; //loadBalancer.ShouldUseWorker(OperationType.MoveValidation);
         
         bool isValid;
         bool isWinning = false;
@@ -130,8 +131,6 @@ public class MainServer
 
         if (shouldUseWorker && workerManager.HasAvailableWorkers())
         {
-            Console.WriteLine("Using worker for move validation");
-            
             var validationRequest = new MoveValidationRequest
             {
                 Board = ConvertTo2DArray(room.Board),
@@ -169,7 +168,6 @@ public class MainServer
         }
 
         // Apply move
-        Console.WriteLine($"Applying move ({move.row}, {move.col}) = {player.PlayerSymbol}");
         room.Board[move.row, move.col] = player.PlayerSymbol ?? "";
         room.LastActivity = DateTime.Now;
 
@@ -228,12 +226,10 @@ public class MainServer
 
     public async Task<(int row, int col)> GetAIMove(GameRoom room, string aiSymbol)
     {
-        var shouldUseWorker = true; //loadBalancer.ShouldUseWorker(OperationType.AIMove);
+        var shouldUseWorker = loadBalancer.ShouldUseWorker(OperationType.AIMove);
 
         if (shouldUseWorker && workerManager.HasAvailableWorkers())
         {
-            Console.WriteLine("Using worker for AI move calculation");
-            
             var aiRequest = new AIRequest
             {
                 Board = ConvertTo2DArray(room.Board),
@@ -412,13 +408,8 @@ public class MainServer
     {
         try
         {
-            // Small delay to make AI feel more natural
-            await Task.Delay(1000);
-
             if (!room.IsGameActive || !room.IsCurrentPlayerAI())
                 return;
-
-            Console.WriteLine($"AI is making a move in room {room.RoomId}");
 
             var aiMove = await GetAIMove(room, room.AISymbol);
             

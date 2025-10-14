@@ -153,8 +153,11 @@ public class WorkerServer
 
     private async Task<WorkerResponse> ProcessAIMoveRequest(WorkerRequest request)
     {
+        var startTime = DateTime.Now;
         try
         {
+            Console.WriteLine($"[Worker] Processing AI request {request.RequestId}");
+            
             var aiRequest = JsonSerializer.Deserialize<AIRequest>(request.Data);
             if (aiRequest == null)
             {
@@ -163,8 +166,13 @@ public class WorkerServer
 
             // Convert jagged array to 2D array
             var board2D = ConvertToRectangularArray(aiRequest.Board);
+            
+            Console.WriteLine($"[Worker] Starting AI calculation for {aiRequest.AISymbol}");
             var gomokuAI = new GomokuAI(aiRequest.AISymbol);
             var (row, col) = gomokuAI.GetBestMove(board2D);
+            
+            var elapsed = DateTime.Now - startTime;
+            Console.WriteLine($"[Worker] AI calculation completed in {elapsed.TotalMilliseconds}ms");
 
             var aiResponse = new AIResponse
             {
@@ -188,6 +196,8 @@ public class WorkerServer
         }
         catch (Exception ex)
         {
+            var elapsed = DateTime.Now - startTime;
+            Console.WriteLine($"[Worker] AI request {request.RequestId} failed after {elapsed.TotalMilliseconds}ms: {ex.Message}");
             return CreateErrorResponse(request.RequestId, $"AI processing error: {ex.Message}");
         }
     }
