@@ -3,22 +3,22 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using SharedLib.Models;
 
-namespace TicTacToeServer;
+namespace MainServer;
 
-public class ClientHandler
+public class ClientHandler : IGamePlayer
 {
     public string ClientId { get; set; }
     public TcpClient TcpClient { get; set; }
     public NetworkStream Stream { get; set; }
-    public PlayerInfo PlayerInfo { get; set; }
-    public GameRoom CurrentRoom { get; set; }
-    public string PlayerSymbol { get; set; }
+    public PlayerInfo? PlayerInfo { get; set; }
+    public GameRoom? CurrentRoom { get; set; }
+    public string? PlayerSymbol { get; set; }
     public bool IsConnected { get; set; } = true;
-    private readonly TicTacToeServer server;
-    private bool isWorker = false; 
+    private readonly MainServer server;
 
-    public ClientHandler(TcpClient tcpClient, TicTacToeServer server)
+    public ClientHandler(TcpClient tcpClient, MainServer server)
     {
         TcpClient = tcpClient;
         Stream = tcpClient.GetStream();
@@ -63,10 +63,7 @@ public class ClientHandler
         }
         catch (Exception ex)
         {
-            if (!isWorker) // Chỉ log error cho game clients
-            {
-                Console.WriteLine($"Client {ClientId} error: {ex.Message}");
-            }
+            Console.WriteLine($"Client {ClientId} error: {ex.Message}");
         }
         finally
         {
@@ -76,44 +73,10 @@ public class ClientHandler
 
     private async Task ProcessMessage(string message)
     {
-        if (!isWorker) // Chỉ log cho game clients
-        {
-            Console.WriteLine($"Client {ClientId}: {message}");
-        }
+        Console.WriteLine($"Client {ClientId}: {message}");
 
         try
         {
-            // Allow workers to register on the same port using a JSON line
-            if (message.Length > 0 && message[0] == '{')
-            {
-                try
-                {
-                    var req = JsonSerializer.Deserialize<WorkerRequest>(message, new JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true
-                    });
-
-                    if (req != null && string.Equals(req.RequestType, "REGISTER_WORKER", StringComparison.OrdinalIgnoreCase))
-                    {
-                        isWorker = true;
-                        
-                        if (req.WorkerInfo != null)
-                        {
-                            server.RegisterWorker(req.WorkerInfo.Ip, req.WorkerInfo.Port, req.WorkerInfo.Role);
-                            Console.WriteLine($"🔧 Worker registration handled: {req.WorkerInfo.Ip}:{req.WorkerInfo.Port} role={req.WorkerInfo.Role}");
-                        }
-                        await SendMessage("WORKER_REGISTERED");
-                        // Close connection after acknowledging registration
-                        await Disconnect();
-                        return;
-                    }
-                }
-                catch
-                {
-                    // Not a worker registration payload, continue with normal client messaging
-                }
-            }
-
             if (message.StartsWith("PLAYER_INFO:"))
             {
                 await HandlePlayerInfo(message.Substring("PLAYER_INFO:".Length));
@@ -126,9 +89,9 @@ public class ClientHandler
             {
                 await HandleFindMatch();
             }
-            else if (message == "PLAY_VS_AI")
+            else if (message == "PLAY_WITH_AI")
             {
-                await HandlePlayVsAI();
+                await HandlePlayWithAI();
             }
             else if (message == "START_GAME")
             {
@@ -141,11 +104,8 @@ public class ClientHandler
         }
         catch (Exception ex)
         {
-            if (!isWorker) // Chỉ log error cho game clients
-            {
-                Console.WriteLine($"Error processing message from {ClientId}: {ex.Message}");
-                await SendMessage($"ERROR:Failed to process message - {ex.Message}");
-            }
+            Console.WriteLine($"Error processing message from {ClientId}: {ex.Message}");
+            await SendMessage($"ERROR:Failed to process message - {ex.Message}");
         }
     }
 
@@ -154,7 +114,7 @@ public class ClientHandler
         try
         {
             PlayerInfo = JsonSerializer.Deserialize<PlayerInfo>(json);
-            Console.WriteLine($"Player {PlayerInfo.playerName} connected with ID {ClientId}");
+            Console.WriteLine($"Player {PlayerInfo?.PlayerName} connected with ID {ClientId}");
             await SendMessage("PLAYER_INFO_ACK:Player info received");
         }
         catch (Exception ex)
@@ -180,26 +140,22 @@ public class ClientHandler
 
         try
         {
-            var moveData = JsonSerializer.Deserialize<MoveData>(json);
+            MoveData? clientMove = JsonSerializer.Deserialize<MoveData>(json);
+            if (clientMove == null) 
+            {
+                await SendMessage("ERROR:Invalid move format");
+                return;
+            }
 
-            if (await server.ProcessGameMove(CurrentRoom, this, moveData))
+            if (await server.ProcessGameMove(CurrentRoom, this, clientMove))
             {
                 // Move was valid and processed
                 var opponent = CurrentRoom.GetOpponent(this);
                 if (opponent != null)
                 {
-                    await SendMessage($"GAME_MOVE:{json}");
                     await opponent.SendMessage($"GAME_MOVE:{json}");
                 }
-
-                // If PvE and now it's AI's turn, trigger AI
-                if (CurrentRoom.IsVsAI && CurrentRoom.CurrentPlayer == "O")
-                {
-                    _ = Task.Run(async () =>
-                    {
-                        await server.ProcessGameMove(CurrentRoom, null!, default!);
-                    });
-                }
+                await SendMessage($"GAME_MOVE:{json}");
             }
         }
         catch (Exception ex)
@@ -240,11 +196,9 @@ public class ClientHandler
                         string playerJson = JsonSerializer.Serialize(PlayerInfo);
                         await opponent.SendMessage($"OPPONENT_INFO:{playerJson}");
                     }
-
                     await SendMessage("MATCH_FOUND:Match found, ready to start");
                     await opponent.SendMessage("MATCH_FOUND:Match found, ready to start");
                 }
-
             }
             else
             {
@@ -255,32 +209,6 @@ public class ClientHandler
         {
             await SendMessage("ERROR:Failed to find or create match");
         }
-    }
-
-    private async Task HandlePlayVsAI()
-    {
-        if (PlayerInfo == null)
-        {
-            await SendMessage("ERROR:Send player info first");
-            return;
-        }
-
-        // Create a new room dedicated to PvE
-        var roomId = Guid.NewGuid().ToString();
-        var room = new GameRoom(roomId);
-        room.SetupVsAI();
-        room.AddPlayer(this); // You are X
-        CurrentRoom = room;
-
-        await SendMessage($"JOIN_ROOM:{room.RoomId}");
-        await SendMessage("MATCH_FOUND:Match found vs AI, ready to start");
-        await SendMessage("PLAYER_SYMBOL:X");
-
-        // Mark player ready and start immediately (AI is auto-ready)
-        room.Player1Ready = true;
-        await server.StartGame(room);
-
-        // If AI starts (if you decide AI can be X), trigger it here; default: player X starts
     }
 
     private async Task HandleStartGame()
@@ -335,12 +263,32 @@ public class ClientHandler
         }
     }
 
+    private async Task HandlePlayWithAI()
+    {
+        if (PlayerInfo == null)
+        {
+            await SendMessage("ERROR:Send player info first");
+            return;
+        }
+
+        var room = await server.CreateAIRoom(this);
+        if (room != null)
+        {
+            CurrentRoom = room;
+            await SendMessage($"AI_MATCH_FOUND:{room.RoomId}");
+        }
+        else
+        {
+            await SendMessage("ERROR:Failed to create AI game");
+        }
+    }
+
     private async Task HandleLeaveMatch()
     {
         if (CurrentRoom != null)
         {
             await server.LeaveRoom(this, CurrentRoom);
-            CurrentRoom = null;
+            CurrentRoom = null!;
             await SendMessage("MATCH_LEFT:You left the match");
         }
     }
@@ -355,18 +303,11 @@ public class ClientHandler
             byte[] data = Encoding.UTF8.GetBytes(message + "\n");
             await Stream.WriteAsync(data, 0, data.Length);
             await Stream.FlushAsync();
-            
-            if (!isWorker) 
-            {
-                Console.WriteLine($"Sent to {ClientId}: {message}");
-            }
+            Console.WriteLine($"Sent to {ClientId}: {message}");
         }
         catch (Exception ex)
         {
-            if (!isWorker) 
-            {
-                Console.WriteLine($"Failed to send message to {ClientId}: {ex.Message}");
-            }
+            Console.WriteLine($"Failed to send message to {ClientId}: {ex.Message}");
             await Disconnect();
         }
     }
@@ -390,21 +331,10 @@ public class ClientHandler
         }
         catch (Exception ex)
         {
-            if (!isWorker) // log error cho game clients
-            {
-                Console.WriteLine($"Error during disconnect for {ClientId}: {ex.Message}");
-            }
+            Console.WriteLine($"Error during disconnect for {ClientId}: {ex.Message}");
         }
 
         server.RemoveClient(this);
-        
-        if (isWorker)
-        {
-            Console.WriteLine($"🔧 Worker registration connection closed");
-        }
-        else
-        {
-            Console.WriteLine($"🎮 Game client disconnected: {ClientId}");
-        }
+        Console.WriteLine($"Client {ClientId} disconnected");
     }
 }
