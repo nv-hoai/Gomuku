@@ -6,10 +6,13 @@ class Program
     {
         Console.WriteLine("=== Distributed Gomoku Server ===");
         Console.WriteLine("Starting server...");
-        Console.WriteLine("Note: Ensure WorkerServer is running on port 6000 for full distributed features");
+        Console.WriteLine("New Architecture: Workers connect TO this server");
+        Console.WriteLine("- Game clients connect on port 5000");
+        Console.WriteLine("- Workers connect on port 5001");
+        Console.WriteLine("- Start WorkerServers after this MainServer is running");
         Console.WriteLine();
 
-        var server = new MainServer(5000);
+        var server = new MainServer(5000, 5001);
 
         Console.CancelKeyPress += (sender, e) =>
         {

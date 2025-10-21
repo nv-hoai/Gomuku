@@ -7,11 +7,15 @@ public static class WorkerProtocol
     public const string AI_MOVE_REQUEST = "AI_MOVE_REQUEST";
     public const string VALIDATE_MOVE_REQUEST = "VALIDATE_MOVE_REQUEST";
     public const string HEALTH_CHECK = "HEALTH_CHECK";
+    public const string WORKER_REGISTRATION = "WORKER_REGISTRATION";
+    public const string PING = "PING";
 
     // Response types
     public const string AI_MOVE_RESPONSE = "AI_MOVE_RESPONSE";
     public const string VALIDATE_MOVE_RESPONSE = "VALIDATE_MOVE_RESPONSE";
     public const string HEALTH_CHECK_RESPONSE = "HEALTH_CHECK_RESPONSE";
+    public const string WORKER_REGISTRATION_ACK = "WORKER_REGISTRATION_ACK";
+    public const string PONG = "PONG";
     public const string ERROR_RESPONSE = "ERROR_RESPONSE";
 
     // Status

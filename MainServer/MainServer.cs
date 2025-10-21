@@ -6,49 +6,55 @@ using SharedLib.Communication;
 using SharedLib.Models;
 using MainServer.Services;
 using System.Text;
+using System.Text.Json;
 
 namespace MainServer;
 
 public class MainServer
 {
     private TcpListener? tcpListener;
+    private TcpListener? workerListener;
     private bool isRunning = false;
     private readonly ConcurrentDictionary<string, ClientHandler> clients = new();
+    private readonly ConcurrentDictionary<string, WorkerConnection> workers = new();
     private readonly MatchmakingService matchmakingService = new();
-    private readonly WorkerManager workerManager = new();
     private readonly LoadBalancer loadBalancer = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<WorkerResponse>> pendingRequests = new();
 
     private readonly int port;
+    private readonly int workerPort;
 
-    public MainServer(int port = 5000)
+    public class WorkerConnection
+    {
+        public string WorkerId { get; set; } = string.Empty;
+        public TcpClient Client { get; set; } = null!;
+        public NetworkStream Stream { get; set; } = null!;
+        public DateTime LastSeen { get; set; } = DateTime.UtcNow;
+    }
+
+    public MainServer(int port = 5000, int workerPort = 5002)
     {
         this.port = port;
+        this.workerPort = workerPort;
     }
 
     public async Task StartAsync()
     {
+        // Start client listener
         tcpListener = new TcpListener(IPAddress.Any, port);
         tcpListener.Start();
+        
+        // Start worker listener  
+        workerListener = new TcpListener(IPAddress.Any, workerPort);
+        workerListener.Start();
+        
         isRunning = true;
 
-        Console.WriteLine($"Distributed Gomoku Server started on port {port}");
+        Console.WriteLine($"Game Server started on port {port}");
+        Console.WriteLine($"Worker port: {workerPort} - waiting for workers...");
 
-        // Start health check for workers
-        await workerManager.StartHealthCheckTask();
-
-        // Add multiple workers for load distribution
-        Console.WriteLine("Configuring worker nodes...");
-
-        // Primary worker
-        await workerManager.AddWorkerAsync("localhost", 6000);
-        // await workerManager.AddWorkerAsync("192.168.236.57", 6000);
-
-        // Optional additional workers (uncomment to use)
-        /*
-        await workerManager.AddWorkerAsync("localhost", 6001);
-        await workerManager.AddWorkerAsync("localhost", 6002);  
-        await workerManager.AddWorkerAsync("worker1.domain.com", 6000);
-        */
+        // Listen for workers
+        _ = Task.Run(ListenForWorkersAsync);
 
         // Start cleanup task
         _ = Task.Run(CleanupRoomsAsync);
@@ -59,6 +65,7 @@ public class MainServer
         // Start server discovery
         _ = Task.Run(ServerDiscovery);
 
+        // Listen for game clients
         while (isRunning)
         {
             try
@@ -79,6 +86,189 @@ public class MainServer
                     Console.WriteLine($"Error accepting client: {ex.Message}");
                 }
             }
+        }
+    }
+
+    private async Task ListenForWorkersAsync()
+    {
+        while (isRunning)
+        {
+            try
+            {
+                var workerClient = await workerListener!.AcceptTcpClientAsync();
+                Console.WriteLine($"Worker connected: {workerClient.Client.RemoteEndPoint}");
+
+                // Handle worker in background
+                _ = Task.Run(() => HandleWorkerAsync(workerClient));
+            }
+            catch (Exception ex)
+            {
+                if (isRunning)
+                {
+                    Console.WriteLine($"Error accepting worker: {ex.Message}");
+                }
+            }
+        }
+    }
+
+    private async Task HandleWorkerAsync(TcpClient workerClient)
+    {
+        var stream = workerClient.GetStream();
+        var buffer = new byte[4096];
+        var messageBuilder = new StringBuilder();
+        string? workerId = null;
+
+        try
+        {
+            while (isRunning && workerClient.Connected)
+            {
+                int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                if (bytesRead == 0) break;
+
+                string data = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                messageBuilder.Append(data);
+
+                string messages = messageBuilder.ToString();
+                string[] lines = messages.Split('\n');
+
+                for (int i = 0; i < lines.Length - 1; i++)
+                {
+                    string message = lines[i].Trim();
+                    if (!string.IsNullOrEmpty(message))
+                    {
+                        workerId = await ProcessWorkerMessage(message, workerClient, stream, workerId);
+                    }
+                }
+
+                messageBuilder.Clear();
+                if (lines.Length > 0)
+                {
+                    messageBuilder.Append(lines[lines.Length - 1]);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Worker error: {ex.Message}");
+        }
+        finally
+        {
+            if (workerId != null)
+            {
+                workers.TryRemove(workerId, out _);
+                Console.WriteLine($"Worker {workerId} disconnected");
+            }
+            stream?.Close();
+            workerClient?.Close();
+        }
+    }
+
+    private async Task<string?> ProcessWorkerMessage(string message, TcpClient client, NetworkStream stream, string? currentWorkerId)
+    {
+        try
+        {
+            var request = JsonSerializer.Deserialize<WorkerRequest>(message);
+            if (request == null) return currentWorkerId;
+
+            switch (request.Type)
+            {
+                case WorkerProtocol.WORKER_REGISTRATION:
+                    var regData = JsonSerializer.Deserialize<JsonElement>(request.Data);
+                    var workerId = regData.GetProperty("WorkerId").GetString() ?? Guid.NewGuid().ToString();
+                    
+                    workers[workerId] = new WorkerConnection
+                    {
+                        WorkerId = workerId,
+                        Client = client,
+                        Stream = stream,
+                        LastSeen = DateTime.UtcNow
+                    };
+
+                    // Send ack
+                    var ack = new WorkerResponse
+                    {
+                        RequestId = request.RequestId,
+                        Type = WorkerProtocol.WORKER_REGISTRATION_ACK,
+                        Status = WorkerProtocol.SUCCESS,
+                        Data = JsonSerializer.Serialize(new { WorkerId = workerId })
+                    };
+                    await SendToWorker(stream, ack);
+
+                    Console.WriteLine($"Worker {workerId} registered");
+                    return workerId;
+
+                default:
+                    // Handle responses from worker
+                    if (pendingRequests.TryRemove(request.RequestId, out var tcs))
+                    {
+                        var response = new WorkerResponse
+                        {
+                            RequestId = request.RequestId,
+                            Type = request.Type,
+                            Status = WorkerProtocol.SUCCESS,
+                            Data = request.Data,
+                            Timestamp = request.Timestamp
+                        };
+                        tcs.SetResult(response);
+                    }
+                    break;
+            }
+
+            return currentWorkerId;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error processing worker message: {ex.Message}");
+            return currentWorkerId;
+        }
+    }
+
+    private async Task SendToWorker(NetworkStream stream, object message)
+    {
+        try
+        {
+            string json = JsonSerializer.Serialize(message);
+            byte[] data = Encoding.UTF8.GetBytes(json + "\n");
+            await stream.WriteAsync(data, 0, data.Length);
+            await stream.FlushAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to send to worker: {ex.Message}");
+        }
+    }
+
+    private async Task<WorkerResponse?> SendRequestToWorker(WorkerRequest request, int timeoutMs = 5000)
+    {
+        var worker = workers.Values.FirstOrDefault();
+        if (worker == null) return null;
+
+        try
+        {
+            var tcs = new TaskCompletionSource<WorkerResponse>();
+            pendingRequests[request.RequestId] = tcs;
+
+            await SendToWorker(worker.Stream, request);
+
+            using var cts = new CancellationTokenSource(timeoutMs);
+            var timeoutTask = Task.Delay(timeoutMs, cts.Token);
+            var responseTask = tcs.Task;
+
+            var completedTask = await Task.WhenAny(responseTask, timeoutTask);
+
+            if (completedTask == timeoutTask)
+            {
+                pendingRequests.TryRemove(request.RequestId, out _);
+                return null;
+            }
+
+            cts.Cancel();
+            return await responseTask;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error sending to worker: {ex.Message}");
+            return null;
         }
     }
 
@@ -122,14 +312,11 @@ public class MainServer
 
     public async Task<bool> ProcessGameMove(GameRoom room, IGamePlayer player, MoveData move)
     {
-        // Check if we should use worker for move validation
-        var shouldUseWorker = true; //loadBalancer.ShouldUseWorker(OperationType.MoveValidation);
-        
         bool isValid;
         bool isWinning = false;
         bool isDraw = false;
 
-        if (shouldUseWorker && workerManager.HasAvailableWorkers())
+        if (workers.Any())
         {
             var validationRequest = new MoveValidationRequest
             {
@@ -139,11 +326,17 @@ public class MainServer
                 PlayerSymbol = player.PlayerSymbol ?? ""
             };
 
-            var response = await workerManager.SendMoveValidationRequestAsync(validationRequest);
+            var request = new WorkerRequest
+            {
+                Type = WorkerProtocol.VALIDATE_MOVE_REQUEST,
+                Data = JsonSerializer.Serialize(validationRequest)
+            };
+
+            var response = await SendRequestToWorker(request);
             
             if (response?.Status == WorkerProtocol.SUCCESS && response.Data != null)
             {
-                var validationResponse = System.Text.Json.JsonSerializer.Deserialize<MoveValidationResponse>(response.Data);
+                var validationResponse = JsonSerializer.Deserialize<MoveValidationResponse>(response.Data);
                 isValid = validationResponse?.IsValid ?? false;
                 isWinning = validationResponse?.IsWinning ?? false;
                 isDraw = validationResponse?.IsDraw ?? false;
@@ -151,7 +344,6 @@ public class MainServer
             else
             {
                 // Fallback to local processing
-                Console.WriteLine("Worker validation failed, using local processing");
                 isValid = ProcessMoveLocally(room, player, move, out isWinning, out isDraw);
             }
         }
@@ -226,9 +418,7 @@ public class MainServer
 
     public async Task<(int row, int col)> GetAIMove(GameRoom room, string aiSymbol)
     {
-        var shouldUseWorker = loadBalancer.ShouldUseWorker(OperationType.AIMove);
-
-        if (shouldUseWorker && workerManager.HasAvailableWorkers())
+        if (workers.Any())
         {
             var aiRequest = new AIRequest
             {
@@ -237,11 +427,17 @@ public class MainServer
                 RoomId = room.RoomId
             };
 
-            var response = await workerManager.SendAIRequestAsync(aiRequest);
+            var request = new WorkerRequest
+            {
+                Type = WorkerProtocol.AI_MOVE_REQUEST,
+                Data = JsonSerializer.Serialize(aiRequest)
+            };
+
+            var response = await SendRequestToWorker(request);
             
             if (response?.Status == WorkerProtocol.SUCCESS && response.Data != null)
             {
-                var aiResponse = System.Text.Json.JsonSerializer.Deserialize<AIResponse>(response.Data);
+                var aiResponse = JsonSerializer.Deserialize<AIResponse>(response.Data);
                 if (aiResponse?.IsValid == true)
                 {
                     return (aiResponse.Row, aiResponse.Col);
@@ -360,6 +556,7 @@ public class MainServer
             {
                 var stats = loadBalancer.GetLoadStats();
                 Console.WriteLine($"Load Stats - System: {stats.SystemLoad}%, Games: {stats.GameLoad}%, Level: {stats.LoadLevel}");
+                Console.WriteLine($"Workers connected: {workers.Count}");
 
                 await Task.Delay(TimeSpan.FromSeconds(30));
             }
@@ -427,7 +624,7 @@ public class MainServer
                     var humanPlayer = room.GetHumanPlayer();
                     if (humanPlayer != null)
                     {
-                        var aiMoveJson = System.Text.Json.JsonSerializer.Serialize(moveData);
+                        var aiMoveJson = JsonSerializer.Serialize(moveData);
                         await humanPlayer.SendMessage($"AI_MOVE:{aiMoveJson}");
                     }
                 }
@@ -447,6 +644,7 @@ public class MainServer
     {
         isRunning = false;
         tcpListener?.Stop();
-        Console.WriteLine("Distributed Server stopped");
+        workerListener?.Stop();
+        Console.WriteLine("Server stopped");
     }
 }

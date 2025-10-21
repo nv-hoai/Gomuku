@@ -1,4 +1,3 @@
-using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -10,57 +9,112 @@ namespace WorkerServer;
 
 public class WorkerServer
 {
-    private TcpListener? tcpListener;
-    private readonly int port;
+    private TcpClient? tcpClient;
+    private NetworkStream? stream;
+    private readonly string mainServerHost;
+    private readonly int mainServerPort;
+    private readonly string workerId;
     private bool isRunning = false;
-    private readonly Dictionary<string, TcpClient> connectedClients = new();
+    private bool isConnected = false;
 
-    public WorkerServer(int port = 6000)
+    public WorkerServer(string mainServerHost = "localhost", int mainServerPort = 5000)
     {
-        this.port = port;
+        this.mainServerHost = mainServerHost;
+        this.mainServerPort = mainServerPort;
+        this.workerId = Environment.MachineName + "-" + Guid.NewGuid().ToString()[..8];
     }
 
     public async Task StartAsync()
     {
-        tcpListener = new TcpListener(IPAddress.Any, port);
-        tcpListener.Start();
         isRunning = true;
-
-        Console.WriteLine($"Worker Server started on port {port}");
+        Console.WriteLine($"Worker {workerId} starting...");
 
         while (isRunning)
         {
             try
             {
-                var tcpClient = await tcpListener.AcceptTcpClientAsync();
-                Console.WriteLine($"MainServer connected: {tcpClient.Client.RemoteEndPoint}");
+                if (!isConnected)
+                {
+                    await ConnectToMainServerAsync();
+                }
 
-                // Handle MainServer connection in background
-                _ = Task.Run(() => HandleMainServerAsync(tcpClient));
+                if (isConnected && stream != null)
+                {
+                    await ListenForRequestsAsync();
+                }
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"Connection error: {ex.Message}");
+                isConnected = false;
+                
                 if (isRunning)
                 {
-                    Console.WriteLine($"Error accepting connection: {ex.Message}");
+                    Console.WriteLine("Attempting to reconnect in 5 seconds...");
+                    await Task.Delay(5000);
                 }
             }
         }
     }
 
-    private async Task HandleMainServerAsync(TcpClient tcpClient)
+    private async Task ConnectToMainServerAsync()
     {
-        var stream = tcpClient.GetStream();
+        try
+        {
+            tcpClient = new TcpClient();
+            await tcpClient.ConnectAsync(mainServerHost, mainServerPort);
+            stream = tcpClient.GetStream();
+            isConnected = true;
+
+            Console.WriteLine($"Worker {workerId} connected to MainServer at {mainServerHost}:{mainServerPort}");
+
+            // Send registration message
+            await RegisterWithMainServerAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to connect to MainServer: {ex.Message}");
+            isConnected = false;
+            tcpClient?.Close();
+            tcpClient = null;
+            stream = null;
+        }
+    }
+
+    private async Task RegisterWithMainServerAsync()
+    {
+        try
+        {
+            var registrationRequest = new WorkerRequest
+            {
+                Type = WorkerProtocol.WORKER_REGISTRATION,
+                Data = JsonSerializer.Serialize(new { WorkerId = workerId, Capabilities = new[] { "AI_PROCESSING", "MOVE_VALIDATION" } })
+            };
+
+            await SendMessage(registrationRequest);
+            Console.WriteLine($"Worker {workerId} registered with MainServer");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to register with MainServer: {ex.Message}");
+        }
+    }
+
+    private async Task ListenForRequestsAsync()
+    {
         var buffer = new byte[4096];
         var messageBuilder = new StringBuilder();
 
         try
         {
-            while (isRunning && tcpClient.Connected)
+            while (isRunning && isConnected && stream != null)
             {
                 int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
                 if (bytesRead == 0)
+                {
+                    Console.WriteLine("MainServer disconnected");
                     break;
+                }
 
                 string data = Encoding.UTF8.GetString(buffer, 0, bytesRead);
                 messageBuilder.Append(data);
@@ -73,7 +127,7 @@ public class WorkerServer
                     string message = lines[i].Trim();
                     if (!string.IsNullOrEmpty(message))
                     {
-                        await ProcessRequest(message, stream);
+                        await ProcessRequest(message);
                     }
                 }
 
@@ -86,17 +140,15 @@ public class WorkerServer
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"MainServer connection error: {ex.Message}");
+            Console.WriteLine($"Error listening for requests: {ex.Message}");
         }
         finally
         {
-            stream?.Close();
-            tcpClient?.Close();
-            Console.WriteLine("MainServer disconnected");
+            isConnected = false;
         }
     }
 
-    private async Task ProcessRequest(string message, NetworkStream stream)
+    private async Task ProcessRequest(string message)
     {
         Console.WriteLine($"Received: {message}");
 
@@ -105,7 +157,7 @@ public class WorkerServer
             var request = JsonSerializer.Deserialize<WorkerRequest>(message);
             if (request == null)
             {
-                await SendErrorResponse(stream, "", "Invalid request format");
+                await SendErrorResponse("", "Invalid request format");
                 return;
             }
 
@@ -127,7 +179,17 @@ public class WorkerServer
                         RequestId = request.RequestId,
                         Type = WorkerProtocol.HEALTH_CHECK_RESPONSE,
                         Status = WorkerProtocol.SUCCESS,
-                        Data = "Worker is healthy"
+                        Data = JsonSerializer.Serialize(new { WorkerId = workerId, Status = "Healthy", Timestamp = DateTime.UtcNow })
+                    };
+                    break;
+
+                case WorkerProtocol.PING:
+                    response = new WorkerResponse
+                    {
+                        RequestId = request.RequestId,
+                        Type = WorkerProtocol.PONG,
+                        Status = WorkerProtocol.SUCCESS,
+                        Data = JsonSerializer.Serialize(new { WorkerId = workerId })
                     };
                     break;
 
@@ -142,12 +204,12 @@ public class WorkerServer
                     break;
             }
 
-            await SendResponse(stream, response);
+            await SendResponse(response);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error processing request: {ex.Message}");
-            await SendErrorResponse(stream, "", $"Processing error: {ex.Message}");
+            await SendErrorResponse("", $"Processing error: {ex.Message}");
         }
     }
 
@@ -156,7 +218,7 @@ public class WorkerServer
         var startTime = DateTime.Now;
         try
         {
-            Console.WriteLine($"[Worker] Processing AI request {request.RequestId}");
+            Console.WriteLine($"[Worker {workerId}] Processing AI request {request.RequestId}");
             
             var aiRequest = JsonSerializer.Deserialize<AIRequest>(request.Data);
             if (aiRequest == null)
@@ -167,12 +229,12 @@ public class WorkerServer
             // Convert jagged array to 2D array
             var board2D = ConvertToRectangularArray(aiRequest.Board);
             
-            Console.WriteLine($"[Worker] Starting AI calculation for {aiRequest.AISymbol}");
+            Console.WriteLine($"[Worker {workerId}] Starting AI calculation for {aiRequest.AISymbol}");
             var gomokuAI = new GomokuAI(aiRequest.AISymbol);
             var (row, col) = gomokuAI.GetBestMove(board2D);
             
             var elapsed = DateTime.Now - startTime;
-            Console.WriteLine($"[Worker] AI calculation completed in {elapsed.TotalMilliseconds}ms");
+            Console.WriteLine($"[Worker {workerId}] AI calculation completed in {elapsed.TotalMilliseconds}ms");
 
             var aiResponse = new AIResponse
             {
@@ -197,7 +259,7 @@ public class WorkerServer
         catch (Exception ex)
         {
             var elapsed = DateTime.Now - startTime;
-            Console.WriteLine($"[Worker] AI request {request.RequestId} failed after {elapsed.TotalMilliseconds}ms: {ex.Message}");
+            Console.WriteLine($"[Worker {workerId}] AI request {request.RequestId} failed after {elapsed.TotalMilliseconds}ms: {ex.Message}");
             return CreateErrorResponse(request.RequestId, $"AI processing error: {ex.Message}");
         }
     }
@@ -259,26 +321,43 @@ public class WorkerServer
         };
     }
 
-    private async Task SendResponse(NetworkStream stream, WorkerResponse response)
+    private async Task SendResponse(WorkerResponse response)
     {
         try
         {
-            string json = JsonSerializer.Serialize(response);
-            byte[] data = Encoding.UTF8.GetBytes(json + "\n");
-            await stream.WriteAsync(data, 0, data.Length);
-            await stream.FlushAsync();
+            await SendMessage(response);
             Console.WriteLine($"Sent response: {response.Type} - {response.Status}");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Failed to send response: {ex.Message}");
+            isConnected = false;
         }
     }
 
-    private async Task SendErrorResponse(NetworkStream stream, string requestId, string errorMessage)
+    private async Task SendMessage(object message)
+    {
+        if (stream == null) return;
+
+        try
+        {
+            string json = JsonSerializer.Serialize(message);
+            byte[] data = Encoding.UTF8.GetBytes(json + "\n");
+            await stream.WriteAsync(data, 0, data.Length);
+            await stream.FlushAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to send message: {ex.Message}");
+            isConnected = false;
+            throw;
+        }
+    }
+
+    private async Task SendErrorResponse(string requestId, string errorMessage)
     {
         var errorResponse = CreateErrorResponse(requestId, errorMessage);
-        await SendResponse(stream, errorResponse);
+        await SendResponse(errorResponse);
     }
 
     private string[,] ConvertToRectangularArray(string[][] jaggedArray)
@@ -296,8 +375,11 @@ public class WorkerServer
 
     public void Stop()
     {
+        Console.WriteLine($"Worker {workerId} stopping...");
         isRunning = false;
-        tcpListener?.Stop();
-        Console.WriteLine("Worker Server stopped");
+        isConnected = false;
+        stream?.Close();
+        tcpClient?.Close();
+        Console.WriteLine($"Worker {workerId} stopped");
     }
 }
