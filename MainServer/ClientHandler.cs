@@ -3,21 +3,22 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using SharedLib.Models;
 
-namespace TicTacToeServer;
+namespace MainServer;
 
-public class ClientHandler
+public class ClientHandler : IGamePlayer
 {
     public string ClientId { get; set; }
     public TcpClient TcpClient { get; set; }
     public NetworkStream Stream { get; set; }
-    public PlayerInfo PlayerInfo { get; set; }
-    public GameRoom CurrentRoom { get; set; }
-    public string PlayerSymbol { get; set; }
+    public PlayerInfo? PlayerInfo { get; set; }
+    public GameRoom? CurrentRoom { get; set; }
+    public string? PlayerSymbol { get; set; }
     public bool IsConnected { get; set; } = true;
-    private readonly TicTacToeServer server;
+    private readonly MainServer server;
 
-    public ClientHandler(TcpClient tcpClient, TicTacToeServer server)
+    public ClientHandler(TcpClient tcpClient, MainServer server)
     {
         TcpClient = tcpClient;
         Stream = tcpClient.GetStream();
@@ -88,6 +89,10 @@ public class ClientHandler
             {
                 await HandleFindMatch();
             }
+            else if (message == "PLAY_WITH_AI")
+            {
+                await HandlePlayWithAI();
+            }
             else if (message == "START_GAME")
             {
                 await HandleStartGame();
@@ -109,7 +114,7 @@ public class ClientHandler
         try
         {
             PlayerInfo = JsonSerializer.Deserialize<PlayerInfo>(json);
-            Console.WriteLine($"Player {PlayerInfo.playerName} connected with ID {ClientId}");
+            Console.WriteLine($"Player {PlayerInfo?.PlayerName} connected with ID {ClientId}");
             await SendMessage("PLAYER_INFO_ACK:Player info received");
         }
         catch (Exception ex)
@@ -135,17 +140,22 @@ public class ClientHandler
 
         try
         {
-            var moveData = JsonSerializer.Deserialize<MoveData>(json);
+            MoveData? clientMove = JsonSerializer.Deserialize<MoveData>(json);
+            if (clientMove == null) 
+            {
+                await SendMessage("ERROR:Invalid move format");
+                return;
+            }
 
-            if (await server.ProcessGameMove(CurrentRoom, this, moveData))
+            if (await server.ProcessGameMove(CurrentRoom, this, clientMove))
             {
                 // Move was valid and processed
                 var opponent = CurrentRoom.GetOpponent(this);
                 if (opponent != null)
                 {
-                    await SendMessage($"GAME_MOVE:{json}");
                     await opponent.SendMessage($"GAME_MOVE:{json}");
                 }
+                await SendMessage($"GAME_MOVE:{json}");
             }
         }
         catch (Exception ex)
@@ -186,11 +196,9 @@ public class ClientHandler
                         string playerJson = JsonSerializer.Serialize(PlayerInfo);
                         await opponent.SendMessage($"OPPONENT_INFO:{playerJson}");
                     }
-
                     await SendMessage("MATCH_FOUND:Match found, ready to start");
                     await opponent.SendMessage("MATCH_FOUND:Match found, ready to start");
                 }
-
             }
             else
             {
@@ -255,12 +263,32 @@ public class ClientHandler
         }
     }
 
+    private async Task HandlePlayWithAI()
+    {
+        if (PlayerInfo == null)
+        {
+            await SendMessage("ERROR:Send player info first");
+            return;
+        }
+
+        var room = await server.CreateAIRoom(this);
+        if (room != null)
+        {
+            CurrentRoom = room;
+            await SendMessage($"AI_MATCH_FOUND:{room.RoomId}");
+        }
+        else
+        {
+            await SendMessage("ERROR:Failed to create AI game");
+        }
+    }
+
     private async Task HandleLeaveMatch()
     {
         if (CurrentRoom != null)
         {
             await server.LeaveRoom(this, CurrentRoom);
-            CurrentRoom = null;
+            CurrentRoom = null!;
             await SendMessage("MATCH_LEFT:You left the match");
         }
     }
