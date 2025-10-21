@@ -27,3 +27,5 @@ echo ================================
 echo MainServer: Game clients and workers
 echo WorkerServer: AI processing
 echo.
+echo Close this window when done.
+pause

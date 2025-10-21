@@ -7,6 +7,8 @@ using SharedLib.Models;
 using MainServer.Services;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using SharedLib.Services;
 
 namespace MainServer;
 
@@ -20,6 +22,7 @@ public class MainServer
     private readonly MatchmakingService matchmakingService = new();
     private readonly LoadBalancer loadBalancer = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<WorkerResponse>> pendingRequests = new();
+    private readonly IServiceProvider serviceProvider;
 
     private readonly int port;
     private readonly int workerPort;
@@ -32,10 +35,18 @@ public class MainServer
         public DateTime LastSeen { get; set; } = DateTime.UtcNow;
     }
 
-    public MainServer(int port = 5000, int workerPort = 5002)
+    public MainServer(int port, int workerPort, IServiceProvider serviceProvider)
     {
         this.port = port;
         this.workerPort = workerPort;
+        this.serviceProvider = serviceProvider;
+    }
+
+    // Public method to get scoped services
+    public T GetService<T>() where T : notnull
+    {
+        using var scope = serviceProvider.CreateScope();
+        return scope.ServiceProvider.GetRequiredService<T>();
     }
 
     public async Task StartAsync()
@@ -569,7 +580,7 @@ public class MainServer
 
     private async Task ServerDiscovery()
     {
-        int udpPort = 5001;
+        int udpPort = 5002;
         var udp = new UdpClient(udpPort);
 
         while (true)

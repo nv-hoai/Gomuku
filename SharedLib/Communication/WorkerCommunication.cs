@@ -23,6 +23,26 @@ public static class WorkerProtocol
     public const string ERROR = "ERROR";
 }
 
+// Authentication Protocol
+public static class AuthProtocol
+{
+    // Client Auth Commands
+    public const string REGISTER = "REGISTER";
+    public const string LOGIN = "LOGIN";
+    public const string LOGOUT = "LOGOUT";
+    public const string GET_PROFILE = "GET_PROFILE";
+    public const string UPDATE_PROFILE = "UPDATE_PROFILE";
+    
+    // Auth Responses
+    public const string REGISTER_SUCCESS = "REGISTER_SUCCESS";
+    public const string REGISTER_FAILED = "REGISTER_FAILED";
+    public const string LOGIN_SUCCESS = "LOGIN_SUCCESS";
+    public const string LOGIN_FAILED = "LOGIN_FAILED";
+    public const string PROFILE_DATA = "PROFILE_DATA";
+    public const string PROFILE_UPDATED = "PROFILE_UPDATED";
+    public const string AUTH_REQUIRED = "AUTH_REQUIRED";
+}
+
 // Base request/response classes
 public class WorkerRequest
 {
@@ -42,7 +62,39 @@ public class WorkerResponse
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 }
 
-// Specific request/response data classes
+// Authentication request/response classes
+public class AuthRequest
+{
+    public string Username { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+    public string? DisplayName { get; set; }
+}
+
+public class AuthResponse
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public UserData? UserData { get; set; }
+}
+
+public class UserData
+{
+    public Guid UserId { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? Avatar { get; set; }
+    public int PlayerLevel { get; set; }
+    public int EloRating { get; set; }
+    public int TotalGamesPlayed { get; set; }
+    public int Wins { get; set; }
+    public int Losses { get; set; }
+    public int Draws { get; set; }
+    public char? PreferredSymbol { get; set; }
+    public string? Bio { get; set; }
+    public double WinRate => TotalGamesPlayed > 0 ? (double)Wins / TotalGamesPlayed : 0.0;
+}
+
+// Specific request/response data classes (existing ones)
 public class AIRequest
 {
     public string[][] Board { get; set; } = new string[15][];
