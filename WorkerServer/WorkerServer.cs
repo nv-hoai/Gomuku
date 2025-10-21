@@ -16,6 +16,7 @@ public class WorkerServer
     private readonly string workerId;
     private bool isRunning = false;
     private bool isConnected = false;
+    private bool isRegistered = false;
 
     public WorkerServer(string mainServerHost = "localhost", int mainServerPort = 5000)
     {
@@ -47,6 +48,7 @@ public class WorkerServer
             {
                 Console.WriteLine($"Connection error: {ex.Message}");
                 isConnected = false;
+                isRegistered = false; // Reset registration status on connection loss
                 
                 if (isRunning)
                 {
@@ -75,6 +77,7 @@ public class WorkerServer
         {
             Console.WriteLine($"Failed to connect to MainServer: {ex.Message}");
             isConnected = false;
+            isRegistered = false; // Reset registration status on connection failure
             tcpClient?.Close();
             tcpClient = null;
             stream = null;
@@ -92,7 +95,7 @@ public class WorkerServer
             };
 
             await SendMessage(registrationRequest);
-            Console.WriteLine($"Worker {workerId} registered with MainServer");
+            Console.WriteLine($"Worker {workerId} is trying to register with MainServer");
         }
         catch (Exception ex)
         {
@@ -145,6 +148,7 @@ public class WorkerServer
         finally
         {
             isConnected = false;
+            isRegistered = false; // Reset registration status when connection is lost
         }
     }
 
@@ -179,9 +183,19 @@ public class WorkerServer
                         RequestId = request.RequestId,
                         Type = WorkerProtocol.HEALTH_CHECK_RESPONSE,
                         Status = WorkerProtocol.SUCCESS,
-                        Data = JsonSerializer.Serialize(new { WorkerId = workerId, Status = "Healthy", Timestamp = DateTime.UtcNow })
+                        Data = JsonSerializer.Serialize(new { 
+                            WorkerId = workerId, 
+                            Status = "Healthy", 
+                            IsRegistered = isRegistered,
+                            IsConnected = isConnected,
+                            Timestamp = DateTime.UtcNow 
+                        })
                     };
                     break;
+
+                case WorkerProtocol.WORKER_REGISTRATION_ACK:
+                    await ProcessRegistrationAck(request);
+                    return;
 
                 case WorkerProtocol.PING:
                     response = new WorkerResponse
@@ -210,6 +224,33 @@ public class WorkerServer
         {
             Console.WriteLine($"Error processing request: {ex.Message}");
             await SendErrorResponse("", $"Processing error: {ex.Message}");
+        }
+    }
+
+    private async Task ProcessRegistrationAck(WorkerRequest request)
+    {
+        try
+        {
+            var ackData = JsonSerializer.Deserialize<JsonElement>(request.Data);
+            var acknowledgedWorkerId = ackData.GetProperty("WorkerId").GetString();
+            
+            if (acknowledgedWorkerId == workerId)
+            {
+                isRegistered = true;
+                Console.WriteLine($"[Worker {workerId}] Registration acknowledged by MainServer");
+                Console.WriteLine($"[Worker {workerId}] Status: Connected and Registered - Ready to process requests");
+                
+                // Optional: Perform any post-registration setup here
+                // For example: update status, initialize additional services, etc.
+            }
+            else
+            {
+                Console.WriteLine($"[Worker {workerId}] Warning: Received acknowledgment for different worker ID: {acknowledgedWorkerId}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Worker {workerId}] Error processing registration acknowledgment: {ex.Message}");
         }
     }
 
@@ -373,11 +414,17 @@ public class WorkerServer
         return result;
     }
 
+    public bool IsReadyToProcess()
+    {
+        return isRunning && isConnected && isRegistered;
+    }
+
     public void Stop()
     {
         Console.WriteLine($"Worker {workerId} stopping...");
         isRunning = false;
         isConnected = false;
+        isRegistered = false;
         stream?.Close();
         tcpClient?.Close();
         Console.WriteLine($"Worker {workerId} stopped");
