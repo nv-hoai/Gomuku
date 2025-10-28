@@ -12,8 +12,8 @@ using SharedLib.Database;
 namespace SharedLib.Migrations
 {
     [DbContext(typeof(GomokuDbContext))]
-    [Migration("20251023093440_MakePlayer2Nullable")]
-    partial class MakePlayer2Nullable
+    [Migration("20251028081023_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)

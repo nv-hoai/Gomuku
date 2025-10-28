@@ -96,7 +96,7 @@ namespace SharedLib.Migrations
                     GameId = table.Column<int>(type: "int", nullable: false)
                         .Annotation("SqlServer:Identity", "1, 1"),
                     Player1Id = table.Column<int>(type: "int", nullable: false),
-                    Player2Id = table.Column<int>(type: "int", nullable: false),
+                    Player2Id = table.Column<int>(type: "int", nullable: true),
                     IsAIGame = table.Column<bool>(type: "bit", nullable: false),
                     WinnerId = table.Column<int>(type: "int", nullable: true),
                     GameResult = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
