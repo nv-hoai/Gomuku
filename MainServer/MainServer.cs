@@ -4,9 +4,13 @@ using System.Net.Sockets;
 using SharedLib.GameEngine;
 using SharedLib.Communication;
 using SharedLib.Models;
+using SharedLib.Database;
+using SharedLib.Database.Models;
+using SharedLib.Services;
 using MainServer.Services;
 using System.Text;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 
 namespace MainServer;
 
@@ -20,6 +24,13 @@ public class MainServer
     private readonly MatchmakingService matchmakingService = new();
     private readonly LoadBalancer loadBalancer = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<WorkerResponse>> pendingRequests = new();
+
+    // Database services
+    private readonly GomokuDbContext dbContext;
+    private readonly UserService userService;
+    private readonly PlayerProfileService profileService;
+    private readonly GameHistoryService gameHistoryService;
+    private readonly FriendshipService friendshipService;
 
     private readonly int port;
     private readonly int workerPort;
@@ -36,6 +47,18 @@ public class MainServer
     {
         this.port = port;
         this.workerPort = workerPort;
+
+        // Initialize database context
+        var optionsBuilder = new DbContextOptionsBuilder<GomokuDbContext>();
+        optionsBuilder.UseSqlServer("Server=(localdb)\\mssqllocaldb;Database=GomokuGameDB;Trusted_Connection=True;MultipleActiveResultSets=true");
+        
+        dbContext = new GomokuDbContext(optionsBuilder.Options);
+        
+        // Initialize services
+        profileService = new PlayerProfileService(dbContext);
+        userService = new UserService(dbContext);
+        gameHistoryService = new GameHistoryService(dbContext);
+        friendshipService = new FriendshipService(dbContext);
     }
 
     public async Task StartAsync()
@@ -513,6 +536,93 @@ public class MainServer
             await room.Player2.SendMessage(endMessage);
 
         Console.WriteLine($"Game ended in room {room.RoomId}: {reason}");
+
+        // Record game result to database
+        try
+        {
+            // Get profile IDs from players
+            var player1Client = room.Player1 as ClientHandler;
+            var player2Client = room.Player2 as ClientHandler;
+            var aiClient = room.Player2 as AIClientHandler;
+
+            if (player1Client?.AuthenticatedProfile != null)
+            {
+                int player1ProfileId = player1Client.AuthenticatedProfile.ProfileId;
+                int? player2ProfileId = null;
+                int? winnerProfileId = null;
+                int totalMoves = CountTotalMoves(room.Board);
+                int gameDurationSeconds = (int)(DateTime.Now - (room.LastActivity - TimeSpan.FromHours(1))).TotalSeconds; // Rough estimate
+                string gameMode = room.IsAIGame ? "AI" : "Ranked";
+
+                if (room.IsAIGame)
+                {
+                    // AI game: only player1 is recorded
+                    player2ProfileId = null;
+                    
+                    // Determine winner based on who made the winning move
+                    if (reason == "DRAW")
+                    {
+                        winnerProfileId = null; // Draw
+                    }
+                    else if (reason == "WIN")
+                    {
+                        winnerProfileId = (winner == room.Player1) ? player1ProfileId : (int?)null;
+                    }
+                    else
+                    {
+                        // Loss or other reason
+                        winnerProfileId = null;
+                    }
+
+                    // For AI games, record with null Player2Id and mark IsAIGame=true
+                    var aiGameResult = await gameHistoryService.RecordAIGameAsync(
+                        player1ProfileId,
+                        winnerProfileId,
+                        reason,
+                        totalMoves,
+                        gameDurationSeconds,
+                        gameMode);
+                    
+                    Console.WriteLine($"AI game recorded: Player1={player1ProfileId}, Winner={winnerProfileId}, Reason={reason}");
+                }
+                else if (player2Client?.AuthenticatedProfile != null)
+                {
+                    // Player vs Player: both players are recorded
+                    player2ProfileId = player2Client.AuthenticatedProfile.ProfileId;
+                    winnerProfileId = winner == room.Player1 ? player1ProfileId : (winner == room.Player2 ? player2ProfileId : (int?)null);
+
+                    await RecordGameResultAsync(
+                        player1ProfileId,
+                        player2ProfileId,
+                        false,
+                        reason,
+                        winnerProfileId,
+                        totalMoves,
+                        TimeSpan.FromSeconds(gameDurationSeconds),
+                        gameMode);
+                    
+                    Console.WriteLine($"PvP game recorded: Player1={player1ProfileId}, Player2={player2ProfileId}, Winner={winnerProfileId}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error recording game result: {ex.Message}");
+        }
+    }
+
+    private int CountTotalMoves(string[,] board)
+    {
+        int count = 0;
+        for (int i = 0; i < board.GetLength(0); i++)
+        {
+            for (int j = 0; j < board.GetLength(1); j++)
+            {
+                if (!string.IsNullOrEmpty(board[i, j]))
+                    count++;
+            }
+        }
+        return count;
     }
 
     public async Task LeaveRoom(IGamePlayer client, GameRoom room)
@@ -638,6 +748,155 @@ public class MainServer
         {
             Console.WriteLine($"Error in AI turn: {ex.Message}");
         }
+    }
+
+    // ==================== Database Service Wrapper Methods ====================
+
+    public async Task<(bool Success, string Message, User? User, PlayerProfile? Profile)> LoginUserAsync(string username, string password)
+    {
+        return await userService.LoginAsync(username, password);
+    }
+
+    public async Task<(bool Success, string Message, User? User)> RegisterUserAsync(string username, string password, string email, string playerName)
+    {
+        return await userService.RegisterAsync(username, password, email, playerName);
+    }
+
+    public async Task<PlayerProfile?> GetPlayerProfileAsync(int profileId)
+    {
+        return await profileService.GetProfileByIdAsync(profileId);
+    }
+
+    public async Task<PlayerProfile?> GetPlayerProfileByNameAsync(string playerName)
+    {
+        return await profileService.GetProfileByNameAsync(playerName);
+    }
+
+    public async Task<int> GetPlayerRankAsync(int profileId)
+    {
+        return await profileService.GetPlayerRankAsync(profileId);
+    }
+
+    public async Task<List<PlayerProfile>> GetLeaderboardAsync(int count)
+    {
+        return await profileService.GetTopPlayersByEloAsync(count);
+    }
+
+    public async Task<List<GameHistory>> GetPlayerGameHistoryAsync(int profileId, int pageSize)
+    {
+        return await gameHistoryService.GetPlayerGamesAsync(profileId, pageSize);
+    }
+
+    public async Task<List<PlayerProfile>> GetFriendsAsync(int profileId)
+    {
+        return await friendshipService.GetFriendsAsync(profileId);
+    }
+
+    public async Task<(bool Success, string Message, Friendship? Friendship)> SendFriendRequestAsync(int requesterId, int receiverId)
+    {
+        if (requesterId == receiverId)
+        {
+            return (false, "Cannot send friend request to yourself", null);
+        }
+
+        var friendship = await friendshipService.SendFriendRequestAsync(requesterId, receiverId);
+        if (friendship != null)
+        {
+            return (true, "Friend request sent", friendship);
+        }
+
+        return (false, "Friend request already exists", null);
+    }
+
+    public async Task<bool> AcceptFriendRequestAsync(int friendshipId, int receiverId)
+    {
+        var friendship = await friendshipService.GetFriendshipByIdAsync(friendshipId);
+        if (friendship == null || friendship.FriendId != receiverId || friendship.Status != "Pending")
+        {
+            return false;
+        }
+
+        return await friendshipService.AcceptFriendRequestAsync(friendshipId);
+    }
+
+    public async Task<GameHistory?> RecordGameResultAsync(
+        int player1ProfileId,
+        int? player2ProfileId,
+        bool isAIGame,
+        string gameResult,
+        int? winnerProfileId,
+        int totalMoves,
+        TimeSpan gameDuration,
+        string gameMode)
+    {
+        // For AI games
+        if (isAIGame || !player2ProfileId.HasValue)
+        {
+            return await gameHistoryService.RecordGameAsync(
+                player1ProfileId,
+                player2ProfileId ?? 0,
+                winnerProfileId,
+                gameResult,
+                totalMoves,
+                (int)gameDuration.TotalSeconds,
+                gameMode,
+                0,
+                0);
+        }
+
+        // For player vs player games - calculate ELO changes
+        var player1 = await profileService.GetProfileByIdAsync(player1ProfileId);
+        var player2 = await profileService.GetProfileByIdAsync(player2ProfileId.Value);
+
+        if (player1 == null || player2 == null)
+            return null;
+
+        // Simple ELO calculation
+        const int K = 32;
+        double expectedPlayer1 = 1.0 / (1.0 + Math.Pow(10, (player2.Elo - player1.Elo) / 400.0));
+        double expectedPlayer2 = 1.0 - expectedPlayer1;
+
+        double actualPlayer1 = winnerProfileId == null ? 0.5 : (winnerProfileId == player1ProfileId ? 1.0 : 0.0);
+        double actualPlayer2 = winnerProfileId == null ? 0.5 : (winnerProfileId == player2ProfileId ? 1.0 : 0.0);
+
+        int player1EloChange = (int)Math.Round(K * (actualPlayer1 - expectedPlayer1));
+        int player2EloChange = (int)Math.Round(K * (actualPlayer2 - expectedPlayer2));
+
+        // Update player ELOs
+        await profileService.UpdateEloAsync(player1ProfileId, player1.Elo + player1EloChange);
+        await profileService.UpdateEloAsync(player2ProfileId.Value, player2.Elo + player2EloChange);
+
+        // Update game stats
+        await profileService.UpdateGameStatsAsync(player1ProfileId, winnerProfileId == player1ProfileId, winnerProfileId == null);
+        await profileService.UpdateGameStatsAsync(player2ProfileId.Value, winnerProfileId == player2ProfileId, winnerProfileId == null);
+
+        return await gameHistoryService.RecordGameAsync(
+            player1ProfileId,
+            player2ProfileId.Value,
+            winnerProfileId,
+            gameResult,
+            totalMoves,
+            (int)gameDuration.TotalSeconds,
+            gameMode,
+            player1EloChange,
+            player2EloChange);
+    }
+
+    // ==================== Profile Update Wrapper Methods ====================
+
+    public async Task<bool> UpdatePlayerNameAsync(int profileId, string newPlayerName)
+    {
+        return await profileService.UpdatePlayerNameAsync(profileId, newPlayerName);
+    }
+
+    public async Task<bool> UpdateAvatarUrlAsync(int profileId, string newAvatarUrl)
+    {
+        return await profileService.UpdateAvatarUrlAsync(profileId, newAvatarUrl);
+    }
+
+    public async Task<bool> UpdateBioAsync(int profileId, string newBio)
+    {
+        return await profileService.UpdateBioAsync(profileId, newBio);
     }
 
     public void Stop()

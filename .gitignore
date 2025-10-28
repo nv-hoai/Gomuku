@@ -3,6 +3,13 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+UNITY_CLIENT_UPDATED.cs
+MESSAGE_FLOW_DIAGRAMS.md
+MESSAGE_PROTOCOL.md
+QUICK_REFERENCE.md
+GAME_RESULT_RECORDING.md
+PROFILE_UPDATE_HANDLERS.md
+
 # User-specific files
 *.rsuser
 *.suo

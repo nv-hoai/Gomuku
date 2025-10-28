@@ -6,4 +6,5 @@ public class PlayerInfo
     public string PlayerName { get; set; } = string.Empty;
     public int PlayerLevel { get; set; }
     public int PlayerElo { get; set; }
+    public string? AvatarUrl { get; set; }
 }
