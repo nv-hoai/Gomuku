@@ -43,7 +43,7 @@ public class MainServer
         public DateTime LastSeen { get; set; } = DateTime.UtcNow;
     }
 
-    public MainServer(int port = 5000, int workerPort = 5002)
+    public MainServer(int port = 5000, int workerPort = 5001)
     {
         this.port = port;
         this.workerPort = workerPort;
@@ -84,9 +84,6 @@ public class MainServer
 
         // Start load monitoring
         _ = Task.Run(MonitorLoadAsync);
-
-        // Start server discovery
-        _ = Task.Run(ServerDiscovery);
 
         // Listen for game clients
         while (isRunning)
@@ -633,7 +630,22 @@ public class MainServer
         var opponent = room.GetOpponent(client);
         if (opponent != null)
         {
-            await opponent.SendMessage("OPPONENT_LEFT:Your opponent left the game");
+            // If game is active, the opponent wins by default
+            if (room.IsGameActive)
+            {
+                Console.WriteLine($"Player {client.PlayerSymbol} left during active game. Player {opponent.PlayerSymbol} wins by default.");
+                
+                // End game with opponent as winner
+                await EndGame(room, opponent, "OPPONENT_LEFT");
+                
+                // Send special message to opponent
+                await opponent.SendMessage("OPPONENT_LEFT:Your opponent left the game. You win!");
+            }
+            else
+            {
+                // Game not active, just notify about leaving
+                await opponent.SendMessage("OPPONENT_LEFT:Your opponent left the game");
+            }
         }
     }
 
@@ -675,40 +687,6 @@ public class MainServer
                 Console.WriteLine($"Error in load monitoring: {ex.Message}");
             }
         }
-    }
-
-    private async Task ServerDiscovery()
-    {
-        int udpPort = 5001;
-        var udp = new UdpClient(udpPort);
-
-        while (true)
-        {
-            try
-            {
-                IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
-                var data = udp.Receive(ref remote);
-                if (Encoding.UTF8.GetString(data) == "DISCOVER")
-                {
-                    var ip = GetLocalIP();
-                    var reply = $"{ip}:{port}";
-                    udp.Send(Encoding.UTF8.GetBytes(reply), reply.Length, remote);
-                    Console.WriteLine($"Reply {reply} to {remote}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"UDP Discovery error: {ex.Message}");
-            }
-        }
-    }
-    
-    private string GetLocalIP()
-    {
-        foreach (var ip in Dns.GetHostEntry(Dns.GetHostName()).AddressList)
-            if (ip.AddressFamily == AddressFamily.InterNetwork)
-                return ip.ToString();
-        return "127.0.0.1";
     }
 
     private async Task HandleAITurn(GameRoom room)

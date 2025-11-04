@@ -11,6 +11,6 @@ echo ================================
 echo.
 
 cd /d "%~dp0WorkerServer"
-dotnet run
+dotnet run -- "192.168.195.69" "5001"
 
 pause

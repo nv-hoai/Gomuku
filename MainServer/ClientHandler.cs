@@ -152,6 +152,10 @@ public class ClientHandler : IGamePlayer
             {
                 await HandleUpdateBio(message.Substring("UPDATE_BIO:".Length));
             }
+            else if (message.StartsWith("CHAT:"))
+            {
+                await HandleChatMessage(message.Substring("CHAT:".Length));
+            }
         }
         catch (Exception ex)
         {
@@ -848,6 +852,31 @@ public class ClientHandler : IGamePlayer
         {
             Console.WriteLine($"Update bio error: {ex.Message}");
             await SendMessage($"ERROR:Failed to update bio - {ex.Message}");
+        }
+    }
+
+    private async Task HandleChatMessage(string chatMessage)
+    {
+        if (CurrentRoom == null)
+        {
+            await SendMessage("ERROR:Not in a room");
+            return;
+        }
+
+        var chatMessageData = new
+        {
+            Sender = PlayerInfo?.PlayerName ?? "Unknown",
+            Message = chatMessage,
+            Timestamp = DateTime.Now
+        };
+
+        string chatJson = JsonSerializer.Serialize(chatMessageData);
+
+        await SendMessage($"CHAT:{chatJson}");
+        var opponent = CurrentRoom.GetOpponent(this);
+        if (opponent != null)
+        {
+            await opponent.SendMessage($"CHAT:{chatJson}");
         }
     }
 
