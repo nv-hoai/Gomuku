@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SharedLib.Database;
 using SharedLib.Database.Models;
-
+using BCrypt.Net;
 namespace SharedLib.Services
 {
     public class UserService
@@ -105,7 +105,7 @@ namespace SharedLib.Services
             }
 
             // Simple password verification (you should use proper password hashing)
-            if (user.PasswordHash != HashPassword(password))
+            if (user.PasswordHash != password)
             {
                 return (false, "Invalid username or password", null, null);
             }
@@ -137,7 +137,7 @@ namespace SharedLib.Services
             }
 
             // Create user
-            var user = await CreateUserAsync(username, HashPassword(password), email);
+            var user = await CreateUserAsync(username, password, email);
 
             // Create player profile (using ProfileService would be better, but for now we'll do it here)
             var profile = new PlayerProfile
