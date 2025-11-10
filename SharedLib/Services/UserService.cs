@@ -60,12 +60,13 @@ namespace SharedLib.Services
             return true;
         }
 
-        public async Task<bool> UpdatePasswordAsync(int userId, string newPasswordHash)
+        public async Task<bool> UpdatePasswordAsync(int userId, string newPassword)
         {
             var user = await _context.Users.FindAsync(userId);
             if (user == null) return false;
 
-            user.PasswordHash = newPasswordHash;
+            // Hash the new password with BCrypt
+            user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
             await _context.SaveChangesAsync();
             return true;
         }
@@ -104,8 +105,8 @@ namespace SharedLib.Services
                 return (false, "Account is inactive", null, null);
             }
 
-            // Simple password verification (you should use proper password hashing)
-            if (user.PasswordHash != password)
+            // Verify password using BCrypt
+            if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
             {
                 return (false, "Invalid username or password", null, null);
             }
@@ -136,8 +137,11 @@ namespace SharedLib.Services
                 return (false, "Email already exists", null);
             }
 
+            // Hash password with BCrypt
+            string hashedPassword = BCrypt.Net.BCrypt.HashPassword(password);
+
             // Create user
-            var user = await CreateUserAsync(username, password, email);
+            var user = await CreateUserAsync(username, hashedPassword, email);
 
             // Create player profile (using ProfileService would be better, but for now we'll do it here)
             var profile = new PlayerProfile
@@ -153,14 +157,6 @@ namespace SharedLib.Services
             await _context.SaveChangesAsync();
 
             return (true, "Registration successful", user);
-        }
-
-        private string HashPassword(string password)
-        {
-            using var sha256 = System.Security.Cryptography.SHA256.Create();
-            var bytes = System.Text.Encoding.UTF8.GetBytes(password);
-            var hash = sha256.ComputeHash(bytes);
-            return Convert.ToBase64String(hash);
         }
     }
 }
