@@ -128,6 +128,10 @@ public class ClientHandler : IGamePlayer
             {
                 await HandleGetFriends();
             }
+            else if (message == "GET_FRIEND_REQUESTS")
+            {
+                await HandleGetFriendRequests();
+            }
             else if (message.StartsWith("SEND_FRIEND_REQUEST:"))
             {
                 await HandleSendFriendRequest(message.Substring("SEND_FRIEND_REQUEST:".Length));
@@ -135,6 +139,10 @@ public class ClientHandler : IGamePlayer
             else if (message.StartsWith("ACCEPT_FRIEND_REQUEST:"))
             {
                 await HandleAcceptFriendRequest(message.Substring("ACCEPT_FRIEND_REQUEST:".Length));
+            }
+            else if (message.StartsWith("REJECT_FRIEND_REQUEST:"))
+            {
+                await HandleRejectFriendRequest(message.Substring("REJECT_FRIEND_REQUEST:".Length));
             }
             else if (message.StartsWith("GET_PLAYER_STATS:"))
             {
@@ -155,6 +163,14 @@ public class ClientHandler : IGamePlayer
             else if (message.StartsWith("CHAT:"))
             {
                 await HandleChatMessage(message.Substring("CHAT:".Length));
+            }
+            else if (message.StartsWith("LOGOUT"))
+            {
+                await HandleLogout();
+            }
+            else if (message.StartsWith("SEARCH_PLAYER:"))
+            {
+                await HandleSearch(message.Substring("SEARCH_PLAYER:".Length));
             }
         }
         catch (Exception ex)
@@ -181,6 +197,8 @@ public class ClientHandler : IGamePlayer
             
             if (success && user != null && profile != null)
             {
+                await server.UpdateStatusAsync(profile.ProfileId, true);
+
                 AuthenticatedUserId = user.UserId;
                 AuthenticatedProfile = profile;
                 
@@ -205,7 +223,7 @@ public class ClientHandler : IGamePlayer
                     Wins = profile.Wins,
                     Losses = profile.Losses,
                     TotalGames = profile.TotalGames,
-                    AvatarUrl = profile.AvatarUrl
+                    AvatarUrl = profile.AvatarUrl,
                 };
 
                 await SendMessage($"LOGIN_SUCCESS:{JsonSerializer.Serialize(responseData)}");
@@ -254,6 +272,40 @@ public class ClientHandler : IGamePlayer
         {
             Console.WriteLine($"Registration error: {ex.Message}");
             await SendMessage($"REGISTER_FAILED:Invalid registration format");
+        }
+    }
+
+    private async Task HandleLogout()
+    {
+        if (AuthenticatedProfile == null)
+        {
+            await SendMessage("ERROR:Not authenticated");
+            return;
+        }
+
+        try
+        {
+            // Update player status to offline in database
+            await server.UpdateStatusAsync(AuthenticatedProfile.ProfileId, false);
+
+            var responseData = new
+            {
+                Message = "Logged out successfully",
+                Username = AuthenticatedProfile.User.Username
+            };
+
+            await SendMessage($"LOGOUT_SUCCESS:{JsonSerializer.Serialize(responseData)}");
+            Console.WriteLine($"User {AuthenticatedProfile.User.Username} logged out");
+
+            // Clear authentication info
+            AuthenticatedUserId = null;
+            AuthenticatedProfile = null;
+            PlayerInfo = null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Logout error: {ex.Message}");
+            await SendMessage($"ERROR:Failed to logout - {ex.Message}");
         }
     }
 
@@ -311,12 +363,14 @@ public class ClientHandler : IGamePlayer
             var leaderboardData = topPlayers.Select((p, index) => new
             {
                 Rank = index + 1,
+                ProfileId = p.ProfileId,
                 PlayerName = p.PlayerName,
                 Elo = p.Elo,
                 Level = p.Level,
                 Wins = p.Wins,
                 TotalGames = p.TotalGames,
-                WinRate = p.WinRate
+                WinRate = p.WinRate,
+                AvatarUrl = p.AvatarUrl
             }).ToList();
 
             await SendMessage($"LEADERBOARD_DATA:{JsonSerializer.Serialize(leaderboardData)}");
@@ -397,6 +451,32 @@ public class ClientHandler : IGamePlayer
         }
     }
 
+    private async Task HandleSearch(string searchTerm)
+    {
+        try
+        {
+            var players = await server.SearchPlayersByNameAsync(searchTerm, 20);
+            var searchData = players.Select(p => new
+            {
+                ProfileId = p.ProfileId,
+                PlayerName = p.PlayerName,
+                Elo = p.Elo,
+                Level = p.Level,
+                Wins = p.Wins,
+                TotalGames = p.TotalGames,
+                AvatarUrl = p.AvatarUrl,
+                IsOnline = p.IsOnline
+            }).ToList();
+
+            await SendMessage($"SEARCH_RESULTS:{JsonSerializer.Serialize(searchData)}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Search error: {ex.Message}");
+            await SendMessage($"ERROR:Failed to search players");
+        }
+    }
+
     // ==================== Friendship Handlers ====================
 
     private async Task HandleGetFriends()
@@ -417,7 +497,9 @@ public class ClientHandler : IGamePlayer
                 Elo = f.Elo,
                 Level = f.Level,
                 Wins = f.Wins,
-                TotalGames = f.TotalGames
+                TotalGames = f.TotalGames,
+                AvatarUrl = f.AvatarUrl,
+                Status = f.IsOnline ? "Online" : "Offline"
             }).ToList();
 
             await SendMessage($"FRIENDS_DATA:{JsonSerializer.Serialize(friendsData)}");
@@ -429,7 +511,7 @@ public class ClientHandler : IGamePlayer
         }
     }
 
-    private async Task HandleSendFriendRequest(string targetPlayerName)
+    private async Task HandleGetFriendRequests()
     {
         if (AuthenticatedProfile == null)
         {
@@ -439,14 +521,42 @@ public class ClientHandler : IGamePlayer
 
         try
         {
-            var targetProfile = await server.GetPlayerProfileByNameAsync(targetPlayerName);
-            if (targetProfile == null)
+            var pendingRequests = await server.GetFriendRequestsAsync(AuthenticatedProfile.ProfileId);
+            var requestsData = pendingRequests.Select(r => new
             {
-                await SendMessage($"ERROR:Player '{targetPlayerName}' not found");
+                FriendshipId = r.FriendshipId,
+                ProfileId = r.User.ProfileId,
+                PlayerName = r.User.PlayerName,
+                AvatarUrl = r.User.AvatarUrl,
+                RequestedAt = r.RequestedAt
+            }).ToList();
+
+            await SendMessage($"FRIEND_REQUESTS_DATA:{JsonSerializer.Serialize(requestsData)}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Get friend requests error: {ex.Message}");
+            await SendMessage($"ERROR:Failed to get friend requests");
+        }
+    }
+
+    private async Task HandleSendFriendRequest(string targetProfileIdStr)
+    {
+        if (AuthenticatedProfile == null)
+        {
+            await SendMessage("ERROR:Not authenticated");
+            return;
+        }
+
+        try
+        {
+            if (!int.TryParse(targetProfileIdStr, out int targetProfileId))
+            {
+                await SendMessage("ERROR:Invalid target profile ID");
                 return;
             }
 
-            var (success, message, _) = await server.SendFriendRequestAsync(AuthenticatedProfile.ProfileId, targetProfile.ProfileId);
+            var (success, message, _) = await server.SendFriendRequestAsync(AuthenticatedProfile.ProfileId, targetProfileId);
             if (success)
             {
                 await SendMessage($"FRIEND_REQUEST_SENT:{message}");
@@ -494,6 +604,40 @@ public class ClientHandler : IGamePlayer
         {
             Console.WriteLine($"Accept friend request error: {ex.Message}");
             await SendMessage($"ERROR:Failed to accept friend request");
+        }
+    }
+
+    private async Task HandleRejectFriendRequest(string friendshipIdStr)
+    {
+        if (AuthenticatedProfile == null)
+        {
+            await SendMessage("ERROR:Not authenticated");
+            return;
+        }
+
+        try
+        {
+            if (int.TryParse(friendshipIdStr, out int friendshipId))
+            {
+                var success = await server.RejectFriendRequestAsync(friendshipId, AuthenticatedProfile.ProfileId);
+                if (success)
+                {
+                    await SendMessage("FRIEND_REQUEST_DENIED:Friend request denied");
+                }
+                else
+                {
+                    await SendMessage("ERROR:Failed to deny friend request");
+                }
+            }
+            else
+            {
+                await SendMessage("ERROR:Invalid friendship ID");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Deny friend request error: {ex.Message}");
+            await SendMessage($"ERROR:Failed to deny friend request");
         }
     }
 

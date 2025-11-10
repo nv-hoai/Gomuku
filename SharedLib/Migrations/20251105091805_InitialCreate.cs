@@ -45,6 +45,7 @@ namespace SharedLib.Migrations
                     Level = table.Column<int>(type: "int", nullable: false),
                     Bio = table.Column<string>(type: "nvarchar(500)", maxLength: 500, nullable: true),
                     AvatarUrl = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: true),
+                    IsOnline = table.Column<bool>(type: "bit", nullable: false),
                     CreatedAt = table.Column<DateTime>(type: "datetime2", nullable: false),
                     LastGameAt = table.Column<DateTime>(type: "datetime2", nullable: true)
                 },

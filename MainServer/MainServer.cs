@@ -760,6 +760,11 @@ public class MainServer
         return await profileService.GetTopPlayersByEloAsync(count);
     }
 
+    public async Task<List<PlayerProfile>> SearchPlayersByNameAsync(string searchTerm, int maxResults)
+    {
+        return await profileService.SearchPlayersByNameAsync(searchTerm, maxResults);
+    }
+
     public async Task<List<GameHistory>> GetPlayerGameHistoryAsync(int profileId, int pageSize)
     {
         return await gameHistoryService.GetPlayerGamesAsync(profileId, pageSize);
@@ -768,6 +773,11 @@ public class MainServer
     public async Task<List<PlayerProfile>> GetFriendsAsync(int profileId)
     {
         return await friendshipService.GetFriendsAsync(profileId);
+    }
+
+    public async Task<List<Friendship>> GetFriendRequestsAsync(int profileId)
+    {
+        return await friendshipService.GetPendingRequestsAsync(profileId);
     }
 
     public async Task<(bool Success, string Message, Friendship? Friendship)> SendFriendRequestAsync(int requesterId, int receiverId)
@@ -789,12 +799,26 @@ public class MainServer
     public async Task<bool> AcceptFriendRequestAsync(int friendshipId, int receiverId)
     {
         var friendship = await friendshipService.GetFriendshipByIdAsync(friendshipId);
+
+        Console.WriteLine($"AcceptFriendRequestAsync: friendshipExists={friendship != null}, receiverCheck={friendship?.FriendId == receiverId}, friendshipStatus={friendship?.Status}");
+
         if (friendship == null || friendship.FriendId != receiverId || friendship.Status != "Pending")
         {
             return false;
         }
 
         return await friendshipService.AcceptFriendRequestAsync(friendshipId);
+    }
+
+    public async Task<bool> RejectFriendRequestAsync(int friendshipId, int receiverId)
+    {
+        var friendship = await friendshipService.GetFriendshipByIdAsync(friendshipId);
+        if (friendship == null || friendship.FriendId != receiverId || friendship.Status != "Pending")
+        {
+            return false;
+        }
+
+        return await friendshipService.RejectFriendRequestAsync(friendshipId);
     }
 
     public async Task<GameHistory?> RecordGameResultAsync(
@@ -875,6 +899,11 @@ public class MainServer
     public async Task<bool> UpdateBioAsync(int profileId, string newBio)
     {
         return await profileService.UpdateBioAsync(profileId, newBio);
+    }
+
+    public async Task<bool> UpdateStatusAsync(int profileId, bool isOnline)
+    {
+        return await profileService.UpdateStatusAsync(profileId, isOnline);
     }
 
     public void Stop()
