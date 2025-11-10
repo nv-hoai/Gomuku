@@ -89,6 +89,16 @@ namespace SharedLib.Services
             return true;
         }
 
+        public async Task<bool> UpdateStatusAsync(int profileId, bool isOnline)
+        {
+            var profile = await _context.PlayerProfiles.FindAsync(profileId);
+            if (profile == null) return false;
+
+            profile.IsOnline = isOnline;
+            await _context.SaveChangesAsync();
+            return true;
+        }
+        
         public async Task<bool> UpdateGameStatsAsync(int profileId, bool won, bool draw)
         {
             var profile = await _context.PlayerProfiles.FindAsync(profileId);
@@ -117,7 +127,6 @@ namespace SharedLib.Services
         public async Task<List<PlayerProfile>> SearchPlayersByNameAsync(string searchTerm, int maxResults = 20)
         {
             return await _context.PlayerProfiles
-                .Include(p => p.User)
                 .Where(p => p.PlayerName.Contains(searchTerm))
                 .Take(maxResults)
                 .ToListAsync();

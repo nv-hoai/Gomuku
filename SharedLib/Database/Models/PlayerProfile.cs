@@ -33,6 +33,8 @@ namespace SharedLib.Database.Models
         [MaxLength(255)]
         public string? AvatarUrl { get; set; }
 
+        public bool IsOnline { get; set; } = false;
+
         [NotMapped]
         public double WinRate => TotalGames > 0 ? (double)Wins / TotalGames * 100 : 0;
 

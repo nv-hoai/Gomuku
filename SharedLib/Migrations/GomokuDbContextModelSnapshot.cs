@@ -144,6 +144,9 @@ namespace SharedLib.Migrations
                     b.Property<int>("Elo")
                         .HasColumnType("int");
 
+                    b.Property<bool>("IsOnline")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime?>("LastGameAt")
                         .HasColumnType("datetime2");
 

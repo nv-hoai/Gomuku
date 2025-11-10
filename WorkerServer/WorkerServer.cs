@@ -4,6 +4,7 @@ using System.Text.Json;
 using SharedLib.Communication;
 using SharedLib.AI;
 using SharedLib.GameEngine;
+using System.Net;
 
 namespace WorkerServer;
 
@@ -11,17 +12,19 @@ public class WorkerServer
 {
     private TcpClient? tcpClient;
     private NetworkStream? stream;
-    private readonly string mainServerHost;
-    private readonly int mainServerPort;
+    private readonly int mainServerPort = 5001;
     private readonly string workerId;
     private bool isRunning = false;
     private bool isConnected = false;
     private bool isRegistered = false;
-
-    public WorkerServer(string mainServerHost = "localhost", int mainServerPort = 5000)
+    private IPAddress[] iPAddresses =
     {
-        this.mainServerHost = mainServerHost;
-        this.mainServerPort = mainServerPort;
+        new IPAddress(new byte[] { 192, 168, 195, 69 }),
+        new IPAddress(new byte[] { 192, 168, 195, 126 }),
+    };
+
+    public WorkerServer()
+    {
         this.workerId = Environment.MachineName + "-" + Guid.NewGuid().ToString()[..8];
     }
 
@@ -64,11 +67,11 @@ public class WorkerServer
         try
         {
             tcpClient = new TcpClient();
-            await tcpClient.ConnectAsync(mainServerHost, mainServerPort);
+            await tcpClient.ConnectAsync(iPAddresses, mainServerPort);
             stream = tcpClient.GetStream();
             isConnected = true;
 
-            Console.WriteLine($"Worker {workerId} connected to MainServer at {mainServerHost}:{mainServerPort}");
+            Console.WriteLine($"Worker {workerId} connected to MainServer at {iPAddresses[0].ToString()} | {iPAddresses[1].ToString()}:{mainServerPort}");
 
             // Send registration message
             await RegisterWithMainServerAsync();

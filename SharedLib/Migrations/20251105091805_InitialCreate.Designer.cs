@@ -12,7 +12,7 @@ using SharedLib.Database;
 namespace SharedLib.Migrations
 {
     [DbContext(typeof(GomokuDbContext))]
-    [Migration("20251028081023_InitialCreate")]
+    [Migration("20251105091805_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -146,6 +146,9 @@ namespace SharedLib.Migrations
 
                     b.Property<int>("Elo")
                         .HasColumnType("int");
+
+                    b.Property<bool>("IsOnline")
+                        .HasColumnType("bit");
 
                     b.Property<DateTime?>("LastGameAt")
                         .HasColumnType("datetime2");

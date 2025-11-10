@@ -43,7 +43,7 @@ public class MainServer
         public DateTime LastSeen { get; set; } = DateTime.UtcNow;
     }
 
-    public MainServer(int port = 5000, int workerPort = 5002)
+    public MainServer(int port = 5000, int workerPort = 5001)
     {
         this.port = port;
         this.workerPort = workerPort;
@@ -84,9 +84,6 @@ public class MainServer
 
         // Start load monitoring
         _ = Task.Run(MonitorLoadAsync);
-
-        // Start server discovery
-        _ = Task.Run(ServerDiscovery);
 
         // Listen for game clients
         while (isRunning)
@@ -633,7 +630,22 @@ public class MainServer
         var opponent = room.GetOpponent(client);
         if (opponent != null)
         {
-            await opponent.SendMessage("OPPONENT_LEFT:Your opponent left the game");
+            // If game is active, the opponent wins by default
+            if (room.IsGameActive)
+            {
+                Console.WriteLine($"Player {client.PlayerSymbol} left during active game. Player {opponent.PlayerSymbol} wins by default.");
+                
+                // End game with opponent as winner
+                await EndGame(room, opponent, "OPPONENT_LEFT");
+                
+                // Send special message to opponent
+                await opponent.SendMessage("OPPONENT_LEFT:Your opponent left the game. You win!");
+            }
+            else
+            {
+                // Game not active, just notify about leaving
+                await opponent.SendMessage("OPPONENT_LEFT:Your opponent left the game");
+            }
         }
     }
 
@@ -675,40 +687,6 @@ public class MainServer
                 Console.WriteLine($"Error in load monitoring: {ex.Message}");
             }
         }
-    }
-
-    private async Task ServerDiscovery()
-    {
-        int udpPort = 5001;
-        var udp = new UdpClient(udpPort);
-
-        while (true)
-        {
-            try
-            {
-                IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
-                var data = udp.Receive(ref remote);
-                if (Encoding.UTF8.GetString(data) == "DISCOVER")
-                {
-                    var ip = GetLocalIP();
-                    var reply = $"{ip}:{port}";
-                    udp.Send(Encoding.UTF8.GetBytes(reply), reply.Length, remote);
-                    Console.WriteLine($"Reply {reply} to {remote}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"UDP Discovery error: {ex.Message}");
-            }
-        }
-    }
-    
-    private string GetLocalIP()
-    {
-        foreach (var ip in Dns.GetHostEntry(Dns.GetHostName()).AddressList)
-            if (ip.AddressFamily == AddressFamily.InterNetwork)
-                return ip.ToString();
-        return "127.0.0.1";
     }
 
     private async Task HandleAITurn(GameRoom room)
@@ -782,6 +760,11 @@ public class MainServer
         return await profileService.GetTopPlayersByEloAsync(count);
     }
 
+    public async Task<List<PlayerProfile>> SearchPlayersByNameAsync(string searchTerm, int maxResults)
+    {
+        return await profileService.SearchPlayersByNameAsync(searchTerm, maxResults);
+    }
+
     public async Task<List<GameHistory>> GetPlayerGameHistoryAsync(int profileId, int pageSize)
     {
         return await gameHistoryService.GetPlayerGamesAsync(profileId, pageSize);
@@ -790,6 +773,11 @@ public class MainServer
     public async Task<List<PlayerProfile>> GetFriendsAsync(int profileId)
     {
         return await friendshipService.GetFriendsAsync(profileId);
+    }
+
+    public async Task<List<Friendship>> GetFriendRequestsAsync(int profileId)
+    {
+        return await friendshipService.GetPendingRequestsAsync(profileId);
     }
 
     public async Task<(bool Success, string Message, Friendship? Friendship)> SendFriendRequestAsync(int requesterId, int receiverId)
@@ -811,12 +799,26 @@ public class MainServer
     public async Task<bool> AcceptFriendRequestAsync(int friendshipId, int receiverId)
     {
         var friendship = await friendshipService.GetFriendshipByIdAsync(friendshipId);
+
+        Console.WriteLine($"AcceptFriendRequestAsync: friendshipExists={friendship != null}, receiverCheck={friendship?.FriendId == receiverId}, friendshipStatus={friendship?.Status}");
+
         if (friendship == null || friendship.FriendId != receiverId || friendship.Status != "Pending")
         {
             return false;
         }
 
         return await friendshipService.AcceptFriendRequestAsync(friendshipId);
+    }
+
+    public async Task<bool> RejectFriendRequestAsync(int friendshipId, int receiverId)
+    {
+        var friendship = await friendshipService.GetFriendshipByIdAsync(friendshipId);
+        if (friendship == null || friendship.FriendId != receiverId || friendship.Status != "Pending")
+        {
+            return false;
+        }
+
+        return await friendshipService.RejectFriendRequestAsync(friendshipId);
     }
 
     public async Task<GameHistory?> RecordGameResultAsync(
@@ -897,6 +899,11 @@ public class MainServer
     public async Task<bool> UpdateBioAsync(int profileId, string newBio)
     {
         return await profileService.UpdateBioAsync(profileId, newBio);
+    }
+
+    public async Task<bool> UpdateStatusAsync(int profileId, bool isOnline)
+    {
+        return await profileService.UpdateStatusAsync(profileId, isOnline);
     }
 
     public void Stop()
