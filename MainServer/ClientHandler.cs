@@ -1159,6 +1159,11 @@ public class ClientHandler : IGamePlayer
 
         IsConnected = false;
 
+        if (AuthenticatedProfile != null)
+        {
+            await server.UpdateStatusAsync(AuthenticatedProfile.ProfileId, false);
+        }
+
         if (CurrentRoom != null)
         {
             await server.LeaveRoom(this, CurrentRoom);
