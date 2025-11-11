@@ -1,5 +1,6 @@
 using System;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -20,6 +21,10 @@ public class ClientHandler : IGamePlayer
     public int? AuthenticatedUserId { get; set; }
     public PlayerProfile? AuthenticatedProfile { get; set; }
     private readonly MainServer server;
+
+    // Encryption support
+    private byte[]? sessionKey;
+    private bool isEncryptionEnabled = false;
 
     public ClientHandler(TcpClient tcpClient, MainServer server)
     {
@@ -80,103 +85,193 @@ public class ClientHandler : IGamePlayer
 
         try
         {
-            if (message.StartsWith("LOGIN:"))
+            // Encryption handshake messages (must be processed BEFORE encryption)
+            if (message == "GET_PUBLIC_KEY")
             {
-                await HandleLogin(message.Substring("LOGIN:".Length));
+                await HandleGetPublicKey();
+                return;
             }
-            else if (message.StartsWith("REGISTER:"))
+            else if (message.StartsWith("SET_SESSION_KEY:"))
             {
-                await HandleRegister(message.Substring("REGISTER:".Length));
+                await HandleSetSessionKey(message.Substring("SET_SESSION_KEY:".Length));
+                return;
             }
-            else if (message.StartsWith("PLAYER_INFO:"))
+
+            // Decrypt message if encryption is enabled
+            string decryptedMessage = message;
+            if (isEncryptionEnabled && sessionKey != null)
             {
-                await HandlePlayerInfo(message.Substring("PLAYER_INFO:".Length));
+                try
+                {
+                    // Message format: "ENC:<base64_encrypted_data>"
+                    if (message.StartsWith("ENC:"))
+                    {
+                        string encryptedData = message.Substring("ENC:".Length);
+                        byte[] encryptedBytes = CryptoUtil.FromBase64(encryptedData);
+                        byte[] decryptedBytes = CryptoUtil.AesDecrypt(encryptedBytes, sessionKey);
+                        decryptedMessage = Encoding.UTF8.GetString(decryptedBytes);
+                        Console.WriteLine($"Decrypted: {decryptedMessage}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Decryption error: {ex.Message}");
+                    await SendMessage("ERROR:Failed to decrypt message");
+                    return;
+                }
             }
-            else if (message.StartsWith("GAME_MOVE:"))
+
+            // Process decrypted message
+            if (decryptedMessage.StartsWith("LOGIN:"))
             {
-                await HandleGameMove(message.Substring("GAME_MOVE:".Length));
+                await HandleLogin(decryptedMessage.Substring("LOGIN:".Length));
             }
-            else if (message == "FIND_MATCH")
+            else if (decryptedMessage.StartsWith("REGISTER:"))
+            {
+                await HandleRegister(decryptedMessage.Substring("REGISTER:".Length));
+            }
+            else if (decryptedMessage.StartsWith("PLAYER_INFO:"))
+            {
+                await HandlePlayerInfo(decryptedMessage.Substring("PLAYER_INFO:".Length));
+            }
+            else if (decryptedMessage.StartsWith("GAME_MOVE:"))
+            {
+                await HandleGameMove(decryptedMessage.Substring("GAME_MOVE:".Length));
+            }
+            else if (decryptedMessage == "FIND_MATCH")
             {
                 await HandleFindMatch();
             }
-            else if (message == "PLAY_WITH_AI")
+            else if (decryptedMessage == "PLAY_WITH_AI")
             {
                 await HandlePlayWithAI();
             }
-            else if (message == "START_GAME")
+            else if (decryptedMessage == "START_GAME")
             {
                 await HandleStartGame();
             }
-            else if (message == "LEAVE_MATCH")
+            else if (decryptedMessage == "LEAVE_MATCH")
             {
                 await HandleLeaveMatch();
             }
-            else if (message == "GET_PROFILE")
+            else if (decryptedMessage == "GET_PROFILE")
             {
                 await HandleGetProfile();
             }
-            else if (message == "GET_LEADERBOARD")
+            else if (decryptedMessage == "GET_LEADERBOARD")
             {
                 await HandleGetLeaderboard();
             }
-            else if (message == "GET_GAME_HISTORY")
+            else if (decryptedMessage == "GET_GAME_HISTORY")
             {
                 await HandleGetGameHistory();
             }
-            else if (message == "GET_FRIENDS")
+            else if (decryptedMessage == "GET_FRIENDS")
             {
                 await HandleGetFriends();
             }
-            else if (message == "GET_FRIEND_REQUESTS")
+            else if (decryptedMessage == "GET_FRIEND_REQUESTS")
             {
                 await HandleGetFriendRequests();
             }
-            else if (message.StartsWith("SEND_FRIEND_REQUEST:"))
+            else if (decryptedMessage.StartsWith("SEND_FRIEND_REQUEST:"))
             {
-                await HandleSendFriendRequest(message.Substring("SEND_FRIEND_REQUEST:".Length));
+                await HandleSendFriendRequest(decryptedMessage.Substring("SEND_FRIEND_REQUEST:".Length));
             }
-            else if (message.StartsWith("ACCEPT_FRIEND_REQUEST:"))
+            else if (decryptedMessage.StartsWith("ACCEPT_FRIEND_REQUEST:"))
             {
-                await HandleAcceptFriendRequest(message.Substring("ACCEPT_FRIEND_REQUEST:".Length));
+                await HandleAcceptFriendRequest(decryptedMessage.Substring("ACCEPT_FRIEND_REQUEST:".Length));
             }
-            else if (message.StartsWith("REJECT_FRIEND_REQUEST:"))
+            else if (decryptedMessage.StartsWith("REJECT_FRIEND_REQUEST:"))
             {
-                await HandleRejectFriendRequest(message.Substring("REJECT_FRIEND_REQUEST:".Length));
+                await HandleRejectFriendRequest(decryptedMessage.Substring("REJECT_FRIEND_REQUEST:".Length));
             }
-            else if (message.StartsWith("GET_PLAYER_STATS:"))
+            else if (decryptedMessage.StartsWith("GET_PLAYER_STATS:"))
             {
-                await HandleGetPlayerStats(message.Substring("GET_PLAYER_STATS:".Length));
+                await HandleGetPlayerStats(decryptedMessage.Substring("GET_PLAYER_STATS:".Length));
             }
-            else if (message.StartsWith("UPDATE_PLAYER_NAME:"))
+            else if (decryptedMessage.StartsWith("UPDATE_PLAYER_NAME:"))
             {
-                await HandleUpdatePlayerName(message.Substring("UPDATE_PLAYER_NAME:".Length));
+                await HandleUpdatePlayerName(decryptedMessage.Substring("UPDATE_PLAYER_NAME:".Length));
             }
-            else if (message.StartsWith("UPDATE_AVATAR_URL:"))
+            else if (decryptedMessage.StartsWith("UPDATE_AVATAR_URL:"))
             {
-                await HandleUpdateAvatarUrl(message.Substring("UPDATE_AVATAR_URL:".Length));
+                await HandleUpdateAvatarUrl(decryptedMessage.Substring("UPDATE_AVATAR_URL:".Length));
             }
-            else if (message.StartsWith("UPDATE_BIO:"))
+            else if (decryptedMessage.StartsWith("UPDATE_BIO:"))
             {
-                await HandleUpdateBio(message.Substring("UPDATE_BIO:".Length));
+                await HandleUpdateBio(decryptedMessage.Substring("UPDATE_BIO:".Length));
             }
-            else if (message.StartsWith("CHAT:"))
+            else if (decryptedMessage.StartsWith("CHAT:"))
             {
-                await HandleChatMessage(message.Substring("CHAT:".Length));
+                await HandleChatMessage(decryptedMessage.Substring("CHAT:".Length));
             }
-            else if (message.StartsWith("LOGOUT"))
+            else if (decryptedMessage.StartsWith("LOGOUT"))
             {
                 await HandleLogout();
             }
-            else if (message.StartsWith("SEARCH_PLAYER:"))
+            else if (decryptedMessage.StartsWith("SEARCH_PLAYER:"))
             {
-                await HandleSearch(message.Substring("SEARCH_PLAYER:".Length));
+                await HandleSearch(decryptedMessage.Substring("SEARCH_PLAYER:".Length));
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error processing message from {ClientId}: {ex.Message}");
             await SendMessage($"ERROR:Failed to process message - {ex.Message}");
+        }
+    }
+
+    // ==================== Encryption Handlers ====================
+
+    private async Task HandleGetPublicKey()
+    {
+        try
+        {
+            // Get server's public key parameters
+            var publicKeyXml = server.GetPublicKeyXml();
+            
+            var responseData = new
+            {
+                PublicKey = publicKeyXml,
+                Message = "Server public key"
+            };
+
+            await SendMessage($"PUBLIC_KEY:{JsonSerializer.Serialize(responseData)}");
+            Console.WriteLine($"Sent public key to client {ClientId}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Get public key error: {ex.Message}");
+            await SendMessage($"ERROR:Failed to get public key");
+        }
+    }
+
+    private async Task HandleSetSessionKey(string encryptedSessionKeyBase64)
+    {
+        try
+        {
+            // Decrypt the session key using server's private key
+            byte[] encryptedSessionKey = CryptoUtil.FromBase64(encryptedSessionKeyBase64);
+            byte[] decryptedSessionKey = server.DecryptSessionKey(encryptedSessionKey);
+
+            if (decryptedSessionKey.Length == 32) // AES-256 requires 32 bytes
+            {
+                sessionKey = decryptedSessionKey;
+                isEncryptionEnabled = true;
+
+                await SendMessage("SESSION_KEY_ACK:Encryption enabled");
+                Console.WriteLine($"Session key established for client {ClientId}. Encryption enabled.");
+            }
+            else
+            {
+                await SendMessage("ERROR:Invalid session key length");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Set session key error: {ex.Message}");
+            await SendMessage($"ERROR:Failed to set session key");
         }
     }
 
@@ -1031,10 +1126,24 @@ public class ClientHandler : IGamePlayer
 
         try
         {
-            byte[] data = Encoding.UTF8.GetBytes(message + "\n");
+            string messageToSend = message;
+
+            // Encrypt message if encryption is enabled (except for handshake messages)
+            if (isEncryptionEnabled && sessionKey != null && 
+                !message.StartsWith("PUBLIC_KEY:") && 
+                !message.StartsWith("SESSION_KEY_ACK:"))
+            {
+                byte[] plainBytes = Encoding.UTF8.GetBytes(message);
+                byte[] encryptedBytes = CryptoUtil.AesEncrypt(plainBytes, sessionKey);
+                string encryptedBase64 = CryptoUtil.ToBase64(encryptedBytes);
+                messageToSend = $"ENC:{encryptedBase64}";
+                Console.WriteLine($"Encrypted message for {ClientId}");
+            }
+
+            byte[] data = Encoding.UTF8.GetBytes(messageToSend + "\n");
             await Stream.WriteAsync(data, 0, data.Length);
             await Stream.FlushAsync();
-            Console.WriteLine($"Sent to {ClientId}: {message}");
+            Console.WriteLine($"Sent to {ClientId}: {(isEncryptionEnabled ? "[ENCRYPTED]" : message)}");
         }
         catch (Exception ex)
         {

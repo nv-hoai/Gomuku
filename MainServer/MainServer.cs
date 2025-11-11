@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using SharedLib.GameEngine;
 using SharedLib.Communication;
 using SharedLib.Models;
@@ -25,6 +26,11 @@ public class MainServer
     private readonly LoadBalancer loadBalancer = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<WorkerResponse>> pendingRequests = new();
 
+    // RSA encryption keys
+    private readonly RSA serverRsa;
+    private readonly RSAParameters serverPublicKey;
+    private readonly RSAParameters serverPrivateKey;
+
     // Database services
     private readonly GomokuDbContext dbContext;
     private readonly UserService userService;
@@ -47,6 +53,12 @@ public class MainServer
     {
         this.port = port;
         this.workerPort = workerPort;
+
+        // Initialize RSA keys (2048-bit)
+        serverRsa = RSA.Create(2048);
+        serverPublicKey = serverRsa.ExportParameters(false);  // Public key only
+        serverPrivateKey = serverRsa.ExportParameters(true);  // Public + Private key
+        Console.WriteLine("RSA key pair generated for secure communication");
 
         // Initialize database context
         var optionsBuilder = new DbContextOptionsBuilder<GomokuDbContext>();
@@ -904,6 +916,20 @@ public class MainServer
     public async Task<bool> UpdateStatusAsync(int profileId, bool isOnline)
     {
         return await profileService.UpdateStatusAsync(profileId, isOnline);
+    }
+
+    // ==================== Encryption Methods ====================
+
+    public string GetPublicKeyXml()
+    {
+        // Export public key as XML string
+        return serverRsa.ToXmlString(false);
+    }
+
+    public byte[] DecryptSessionKey(byte[] encryptedSessionKey)
+    {
+        // Decrypt session key using server's private key
+        return CryptoUtil.RsaDecrypt(encryptedSessionKey, serverPrivateKey);
     }
 
     public void Stop()
